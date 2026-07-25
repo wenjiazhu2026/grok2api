@@ -1,0 +1,41 @@
+server:
+  listen: "0.0.0.0:8000"
+  maxBodyBytes: 33554432
+  readTimeout: 15m
+  requestTimeout: 2h
+  swaggerEnabled: false
+
+auth:
+  accessTokenTTL: 15m
+  refreshTokenTTL: 720h
+  secureCookies: true
+
+secrets:
+  jwtSecret: "0bddf868cf63346984ba01d24df43660394a5e06fc7cdceea6ccce2dba13eddf"
+  credentialEncryptionKey: "4w2OWRH+k3ka0vVfdOHRKFO7656ZgYqw4b8uY0/yvgE="
+
+bootstrapAdmin:
+  username: "admin"
+  password: "LiR7bCBtaJNt3VK"
+
+frontend:
+  staticPath: "./frontend/dist"
+
+database:
+  driver: sqlite
+  sqlite:
+    path: "./data/backend.db"
+
+runtimeStore:
+  driver: memory
+
+deployment:
+  replicas: 1
+  instanceID: ""
+  clusterID: "grok2api"
+  sharedMedia: false
+
+media:
+  driver: local
+  local:
+    path: "./data/media"
