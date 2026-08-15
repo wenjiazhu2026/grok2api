@@ -70,7 +70,6 @@ const (
 	// Statsig mode
 	StatsigModeManual           = "manual"
 	StatsigModeURL              = "url"
-	StatsigModeURL                = "url"
 	ClearanceModeManual           = "manual"
 	ClearanceModeFlareSolverr     = "flaresolverr"
 	ClearanceModeOnDemand         = "on_demand"
