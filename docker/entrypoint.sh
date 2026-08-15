@@ -8,14 +8,102 @@ mkdir -p "${quality_guard_dir}"
 chown grok2api:grok2api "${quality_guard_dir}"
 chmod 0700 "${quality_guard_dir}"
 
-if [ ! -f "${GROK2API_CONFIG_SOURCE}" ]; then
-  echo "missing config: ${GROK2API_CONFIG_SOURCE}" >&2
-  echo "mount config.yaml to /run/grok2api/config.yaml" >&2
-  exit 1
-fi
+# Check if config file exists
+if [ -f "${GROK2API_CONFIG_SOURCE}" ]; then
+    # Copy existing config
+    cp "${GROK2API_CONFIG_SOURCE}" /app/config.yaml
+    chown grok2api:grok2api /app/config.yaml
+    chmod 0600 /app/config.yaml
+elif [ -n "${GROK2API_SECRETS_JWT_SECRET}" ] && [ -n "${GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY}" ]; then
+    # Generate config from environment variables
+    echo "Generating config from environment variables..." >&2
+    
+    # Set defaults
+    : "${GROK2API_SERVER_LISTEN:=0.0.0.0:8000}"
+    : "${GROK2API_SERVER_MAX_BODY_BYTES:=33554432}"
+    : "${GROK2API_SERVER_READ_TIMEOUT:=15m}"
+    : "${GROK2API_SERVER_REQUEST_TIMEOUT:=2h}"
+    : "${GROK2API_SERVER_SWAGGER_ENABLED:=false}"
+    : "${GROK2API_AUTH_ACCESS_TOKEN_TTL:=15m}"
+    : "${GROK2API_AUTH_REFRESH_TOKEN_TTL:=720h}"
+    : "${GROK2API_AUTH_SECURE_COOKIES:=true}"
+    : "${GROK2API_BOOTSTRAP_ADMIN_USERNAME:=admin}"
+    : "${GROK2API_BOOTSTRAP_ADMIN_PASSWORD:=ChangeMe123!}"
+    : "${GROK2API_FRONTEND_STATIC_PATH:=./frontend/dist}"
+    : "${GROK2API_DATABASE_DRIVER:=sqlite}"
+    : "${GROK2API_DATABASE_SQLITE_PATH:=./data/backend.db}"
+    : "${GROK2API_RUNTIME_STORE_DRIVER:=memory}"
+    : "${GROK2API_DEPLOYMENT_REPLICAS:=1}"
+    : "${GROK2API_DEPLOYMENT_INSTANCE_ID:=}"
+    : "${GROK2API_DEPLOYMENT_CLUSTER_ID:=grok2api}"
+    : "${GROK2API_MEDIA_DRIVER:=local}"
+    : "${GROK2API_MEDIA_LOCAL_PATH:=./data/media}"
+    : "${GROK2API_ROUTING_REASONING_REPLAY_ENABLED:=true}"
 
-cp "${GROK2API_CONFIG_SOURCE}" /app/config.yaml
-chown grok2api:grok2api /app/config.yaml
-chmod 0600 /app/config.yaml
+    cat > /app/config.yaml << CONFIG
+server:
+  listen: "${GROK2API_SERVER_LISTEN}"
+  maxBodyBytes: ${GROK2API_SERVER_MAX_BODY_BYTES}
+  readTimeout: ${GROK2API_SERVER_READ_TIMEOUT}
+  requestTimeout: ${GROK2API_SERVER_REQUEST_TIMEOUT}
+  swaggerEnabled: ${GROK2API_SERVER_SWAGGER_ENABLED}
+
+auth:
+  accessTokenTTL: ${GROK2API_AUTH_ACCESS_TOKEN_TTL}
+  refreshTokenTTL: ${GROK2API_AUTH_REFRESH_TOKEN_TTL}
+  secureCookies: ${GROK2API_AUTH_SECURE_COOKIES}
+
+secrets:
+  jwtSecret: "${GROK2API_SECRETS_JWT_SECRET}"
+  credentialEncryptionKey: "${GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY}"
+
+bootstrapAdmin:
+  username: "${GROK2API_BOOTSTRAP_ADMIN_USERNAME}"
+  password: "${GROK2API_BOOTSTRAP_ADMIN_PASSWORD}"
+
+frontend:
+  staticPath: "${GROK2API_FRONTEND_STATIC_PATH}"
+
+database:
+  driver: "${GROK2API_DATABASE_DRIVER}"
+  sqlite:
+    path: "${GROK2API_DATABASE_SQLITE_PATH}"
+
+runtimeStore:
+  driver: "${GROK2API_RUNTIME_STORE_DRIVER}"
+
+deployment:
+  replicas: ${GROK2API_DEPLOYMENT_REPLICAS}
+  instanceID: "${GROK2API_DEPLOYMENT_INSTANCE_ID}"
+  clusterID: "${GROK2API_DEPLOYMENT_CLUSTER_ID}"
+  sharedMedia: false
+
+media:
+  driver: "${GROK2API_MEDIA_DRIVER}"
+  local:
+    path: "${GROK2API_MEDIA_LOCAL_PATH}"
+
+routing:
+  reasoningReplayEnabled: ${GROK2API_ROUTING_REASONING_REPLAY_ENABLED}
+
+audit:
+  bufferSize: 16384
+  batchSize: 256
+  flushInterval: 250ms
+  commitDelay: 5ms
+  ledgerMode: enforce
+  ledgerFailureThreshold: 1
+  ledgerUnhealthyGrace: 10s
+  ledgerQueueHighWatermarkPercent: 90
+CONFIG
+
+    chown grok2api:grok2api /app/config.yaml
+    chmod 0600 /app/config.yaml
+    echo "Config generated successfully" >&2
+else
+    echo "missing config: ${GROK2API_CONFIG_SOURCE}" >&2
+    echo "Please provide either config.yaml or GROK2API_SECRETS_JWT_SECRET and GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY" >&2
+    exit 1
+fi
 
 exec su-exec grok2api:grok2api "$@"

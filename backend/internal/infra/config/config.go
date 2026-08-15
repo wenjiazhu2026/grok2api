@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -21,10 +22,54 @@ import (
 )
 
 const (
+	// Database
 	DatabaseURLEnv                = "GROK2API_DATABASE_URL"
+	DatabaseDriverEnv            = "GROK2API_DATABASE_DRIVER"
+	SQLitePathEnv                = "GROK2API_DATABASE_SQLITE_PATH"
+	
+	// Secrets
 	JWTSecretEnv                  = "GROK2API_SECRETS_JWT_SECRET"
-	CredentialEncryptionKeyEnv    = "GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY"
-	StatsigModeManual             = "manual"
+	CredentialEncryptionKeyEnv      = "GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY"
+	
+	// Auth
+	AccessTokenTTLEnv            = "GROK2API_AUTH_ACCESS_TOKEN_TTL"
+	RefreshTokenTTLEnv           = "GROK2API_AUTH_REFRESH_TOKEN_TTL"
+	SecureCookiesEnv              = "GROK2API_AUTH_SECURE_COOKIES"
+	
+	// Server
+	ListenEnv                    = "GROK2API_SERVER_LISTEN"
+	MaxBodyBytesEnv              = "GROK2API_SERVER_MAX_BODY_BYTES"
+	ReadTimeoutEnv               = "GROK2API_SERVER_READ_TIMEOUT"
+	RequestTimeoutEnv             = "GROK2API_SERVER_REQUEST_TIMEOUT"
+	SwaggerEnabledEnv            = "GROK2API_SERVER_SWAGGER_ENABLED"
+	
+	// Bootstrap Admin
+	BootstrapUsernameEnv         = "GROK2API_BOOTSTRAP_ADMIN_USERNAME"
+	BootstrapPasswordEnv         = "GROK2API_BOOTSTRAP_ADMIN_PASSWORD"
+	
+	// Frontend
+	FrontendStaticPathEnv        = "GROK2API_FRONTEND_STATIC_PATH"
+	
+	// Runtime Store
+	RuntimeStoreDriverEnv        = "GROK2API_RUNTIME_STORE_DRIVER"
+	RedisAddressEnv             = "GROK2API_RUNTIME_STORE_REDIS_ADDRESS"
+	RedisPasswordEnv            = "GROK2API_RUNTIME_STORE_REDIS_PASSWORD"
+	
+	// Media
+	MediaDriverEnv              = "GROK2API_MEDIA_DRIVER"
+	MediaLocalPathEnv           = "GROK2API_MEDIA_LOCAL_PATH"
+	
+	// Deployment
+	DeploymentReplicasEnv       = "GROK2API_DEPLOYMENT_REPLICAS"
+	DeploymentInstanceIDEnv     = "GROK2API_DEPLOYMENT_INSTANCE_ID"
+	DeploymentClusterIDEnv      = "GROK2API_DEPLOYMENT_CLUSTER_ID"
+	
+	// Routing
+	ReasoningReplayEnabledEnv   = "GROK2API_ROUTING_REASONING_REPLAY_ENABLED"
+	
+	// Statsig mode
+	StatsigModeManual           = "manual"
+	StatsigModeURL              = "url"
 	StatsigModeURL                = "url"
 	ClearanceModeManual           = "manual"
 	ClearanceModeFlareSolverr     = "flaresolverr"
@@ -399,13 +444,100 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// parseBool parses boolean values from environment variables.
+// Accepts "true", "1", "yes", "on" (case-insensitive) as true,
+// and "false", "0", "no", "off" as false.
+func parseBool(value string) (bool, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false, false
+	}
+	lower := strings.ToLower(value)
+	switch lower {
+	case "true", "1", "yes", "on":
+		return true, true
+	case "false", "0", "no", "off":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
 // applyEnvironmentOverrides applies typed, application-owned environment
 // overrides after YAML and before CLI overrides. Empty values are ignored so
 // Compose can pass an optional variable without changing existing deployments.
 func applyEnvironmentOverrides(cfg *Config) error {
-	// Override database URL
-	value := strings.TrimSpace(os.Getenv(DatabaseURLEnv))
-	if value != "" {
+	// === Server Config ===
+	if value := strings.TrimSpace(os.Getenv(ListenEnv)); value != "" {
+		cfg.Server.Listen = value
+	}
+	if value := strings.TrimSpace(os.Getenv(MaxBodyBytesEnv)); value != "" {
+		if bytes, err := strconv.ParseInt(value, 10, 64); err == nil {
+			cfg.Server.MaxBodyBytes = bytes
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(ReadTimeoutEnv)); value != "" {
+		if duration, err := time.ParseDuration(value); err == nil {
+			cfg.Server.ReadTimeout = Duration(duration)
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(RequestTimeoutEnv)); value != "" {
+		if duration, err := time.ParseDuration(value); err == nil {
+			cfg.Server.RequestTimeout = Duration(duration)
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(SwaggerEnabledEnv)); value != "" {
+		if enabled, ok := parseBool(value); ok {
+			cfg.Server.SwaggerEnabled = enabled
+		}
+	}
+
+	// === Auth Config ===
+	if value := strings.TrimSpace(os.Getenv(AccessTokenTTLEnv)); value != "" {
+		if duration, err := time.ParseDuration(value); err == nil {
+			cfg.Auth.AccessTokenTTL = Duration(duration)
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(RefreshTokenTTLEnv)); value != "" {
+		if duration, err := time.ParseDuration(value); err == nil {
+			cfg.Auth.RefreshTokenTTL = Duration(duration)
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(SecureCookiesEnv)); value != "" {
+		if secure, ok := parseBool(value); ok {
+			cfg.Auth.SecureCookies = secure
+		}
+	}
+
+	// === Secrets Config ===
+	if value := strings.TrimSpace(os.Getenv(JWTSecretEnv)); value != "" {
+		cfg.Secrets.JWTSecret = value
+	}
+	if value := strings.TrimSpace(os.Getenv(CredentialEncryptionKeyEnv)); value != "" {
+		cfg.Secrets.CredentialEncryptionKey = value
+	}
+
+	// === Bootstrap Admin ===
+	if value := strings.TrimSpace(os.Getenv(BootstrapUsernameEnv)); value != "" {
+		cfg.BootstrapAdmin.Username = value
+	}
+	if value := strings.TrimSpace(os.Getenv(BootstrapPasswordEnv)); value != "" {
+		cfg.BootstrapAdmin.Password = value
+	}
+
+	// === Frontend Config ===
+	if value := strings.TrimSpace(os.Getenv(FrontendStaticPathEnv)); value != "" {
+		cfg.Frontend.StaticPath = value
+	}
+
+	// === Database Config ===
+	if value := strings.TrimSpace(os.Getenv(DatabaseDriverEnv)); value != "" {
+		cfg.Database.Driver = value
+	}
+	if value := strings.TrimSpace(os.Getenv(SQLitePathEnv)); value != "" {
+		cfg.Database.SQLite.Path = value
+	}
+	if value := strings.TrimSpace(os.Getenv(DatabaseURLEnv)); value != "" {
 		dsn, err := validatePostgresEnvironmentURL(value)
 		if err != nil {
 			return err
@@ -414,16 +546,43 @@ func applyEnvironmentOverrides(cfg *Config) error {
 		cfg.Database.Postgres.DSN = dsn
 	}
 
-	// Override JWT secret
-	jwtSecret := strings.TrimSpace(os.Getenv(JWTSecretEnv))
-	if jwtSecret != "" {
-		cfg.Secrets.JWTSecret = jwtSecret
+	// === Runtime Store Config ===
+	if value := strings.TrimSpace(os.Getenv(RuntimeStoreDriverEnv)); value != "" {
+		cfg.RuntimeStore.Driver = value
+	}
+	if value := strings.TrimSpace(os.Getenv(RedisAddressEnv)); value != "" {
+		cfg.RuntimeStore.Redis.Address = value
+	}
+	if value := strings.TrimSpace(os.Getenv(RedisPasswordEnv)); value != "" {
+		cfg.RuntimeStore.Redis.Password = value
 	}
 
-	// Override credential encryption key
-	encKey := strings.TrimSpace(os.Getenv(CredentialEncryptionKeyEnv))
-	if encKey != "" {
-		cfg.Secrets.CredentialEncryptionKey = encKey
+	// === Deployment Config ===
+	if value := strings.TrimSpace(os.Getenv(DeploymentReplicasEnv)); value != "" {
+		if replicas, err := strconv.Atoi(value); err == nil {
+			cfg.Deployment.Replicas = replicas
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(DeploymentInstanceIDEnv)); value != "" {
+		cfg.Deployment.InstanceID = value
+	}
+	if value := strings.TrimSpace(os.Getenv(DeploymentClusterIDEnv)); value != "" {
+		cfg.Deployment.ClusterID = value
+	}
+
+	// === Media Config ===
+	if value := strings.TrimSpace(os.Getenv(MediaDriverEnv)); value != "" {
+		cfg.Media.Driver = value
+	}
+	if value := strings.TrimSpace(os.Getenv(MediaLocalPathEnv)); value != "" {
+		cfg.Media.Local.Path = value
+	}
+
+	// === Routing Config ===
+	if value := strings.TrimSpace(os.Getenv(ReasoningReplayEnabledEnv)); value != "" {
+		if enabled, ok := parseBool(value); ok {
+			cfg.Routing.ReasoningReplayEnabled = enabled
+		}
 	}
 
 	return nil
