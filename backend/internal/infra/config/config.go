@@ -22,6 +22,8 @@ import (
 
 const (
 	DatabaseURLEnv                = "GROK2API_DATABASE_URL"
+	JWTSecretEnv                  = "GROK2API_SECRETS_JWT_SECRET"
+	CredentialEncryptionKeyEnv    = "GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY"
 	StatsigModeManual             = "manual"
 	StatsigModeURL                = "url"
 	ClearanceModeManual           = "manual"
@@ -401,16 +403,29 @@ func Load(path string) (Config, error) {
 // overrides after YAML and before CLI overrides. Empty values are ignored so
 // Compose can pass an optional variable without changing existing deployments.
 func applyEnvironmentOverrides(cfg *Config) error {
+	// Override database URL
 	value := strings.TrimSpace(os.Getenv(DatabaseURLEnv))
-	if value == "" {
-		return nil
+	if value != "" {
+		dsn, err := validatePostgresEnvironmentURL(value)
+		if err != nil {
+			return err
+		}
+		cfg.Database.Driver = "postgres"
+		cfg.Database.Postgres.DSN = dsn
 	}
-	dsn, err := validatePostgresEnvironmentURL(value)
-	if err != nil {
-		return err
+
+	// Override JWT secret
+	jwtSecret := strings.TrimSpace(os.Getenv(JWTSecretEnv))
+	if jwtSecret != "" {
+		cfg.Secrets.JWTSecret = jwtSecret
 	}
-	cfg.Database.Driver = "postgres"
-	cfg.Database.Postgres.DSN = dsn
+
+	// Override credential encryption key
+	encKey := strings.TrimSpace(os.Getenv(CredentialEncryptionKeyEnv))
+	if encKey != "" {
+		cfg.Secrets.CredentialEncryptionKey = encKey
+	}
+
 	return nil
 }
 
