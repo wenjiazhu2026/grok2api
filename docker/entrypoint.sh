@@ -31,14 +31,17 @@ elif [ -n "${GROK2API_SECRETS_JWT_SECRET}" ] && [ -n "${GROK2API_SECRETS_CREDENT
     : "${GROK2API_BOOTSTRAP_ADMIN_PASSWORD:=ChangeMe123!}"
     : "${GROK2API_FRONTEND_STATIC_PATH:=./frontend/dist}"
     : "${GROK2API_DATABASE_DRIVER:=sqlite}"
-    : "${GROK2API_DATABASE_SQLITE_PATH:=./data/backend.db}"
+    : "${GROK2API_DATABASE_SQLITE_PATH:=/tmp/backend.db}"
     : "${GROK2API_RUNTIME_STORE_DRIVER:=memory}"
     : "${GROK2API_DEPLOYMENT_REPLICAS:=1}"
     : "${GROK2API_DEPLOYMENT_INSTANCE_ID:=}"
     : "${GROK2API_DEPLOYMENT_CLUSTER_ID:=grok2api}"
     : "${GROK2API_MEDIA_DRIVER:=local}"
-    : "${GROK2API_MEDIA_LOCAL_PATH:=./data/media}"
+    : "${GROK2API_MEDIA_LOCAL_PATH:=/tmp/media}"
     : "${GROK2API_ROUTING_REASONING_REPLAY_ENABLED:=true}"
+
+    mkdir -p /tmp/media
+    chown grok2api:grok2api /tmp/backend.db /tmp/media 2>/dev/null || true
 
     cat > /app/config.yaml << CONFIG
 server:
