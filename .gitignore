@@ -12,6 +12,7 @@ Thumbs.db
 .env.*
 !.env.example
 /config.local.yaml
+/config.yaml
 /config.*.local.yaml
 /docs/*
 /docs/rules/*
