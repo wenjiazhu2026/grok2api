@@ -194,6 +194,35 @@ Open `http://127.0.0.1:8000`. The image already includes the frontend; SQLite da
 
 ### Deploy on Railway (recommended for production)
 
+#### Docker images
+
+Pre-built images are available on GitHub Container Registry:
+
+| Image | Tags | Dockerfile | Use case |
+|:--|:--|:--|:--|
+| **Standard** | `ghcr.io/wenjiazhu1980/grok2api:latest` | `Dockerfile` | Self-hosting with `docker compose` |
+| **Railway** | `ghcr.io/wenjiazhu1980/grok2api:main-railway` | `Dockerfile.railway` | **Railway deployment** (no cache mounts) |
+
+**Key differences:**
+
+- `Dockerfile`: Uses `--mount=type=cache` for faster builds. Optimized for self-hosting where Docker BuildKit is available. Not compatible with Railway's build system.
+- `Dockerfile.railway`: Removes all `--mount=type=cache` directives, adds Python for embedded QualityGuard sidecar. Optimized for Railway's build environment and environment-variable-only configuration.
+
+**Quick deploy to Railway using pre-built image:**
+
+```bash
+# Option 1: Railway CLI
+railway service create --name grok2api
+railway variable set GROK2API_SECRETS_JWT_SECRET="$(openssl rand -hex 32)"
+railway variable set GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+railway variable set GROK2API_DATABASE_DRIVER=postgres
+railway variable set GROK2API_DATABASE_URL='${{Postgres.DATABASE_PRIVATE_URL}}'
+railway up --image ghcr.io/wenjiazhu1980/grok2api:main-railway
+
+# Option 2: Railway Dashboard
+# New Service → Docker Image → ghcr.io/wenjiazhu1980/grok2api:main-railway
+```
+
 Railway provides persistent PostgreSQL and Redis add-ons, making it ideal for production deployments with data persistence requirements.
 
 #### Prerequisites
@@ -203,7 +232,7 @@ Railway provides persistent PostgreSQL and Redis add-ons, making it ideal for pr
 
 #### Steps
 
-1. **Fork this repository** (or use [wenjiazhu1980/grok2api](https://github.com/wenjiazhu1980/grok2api) which includes Railway-specific optimizations)
+1. **Option A: Use pre-built image** (recommended) — see "Quick deploy" above
 
 2. **Link your project**
 

@@ -195,6 +195,35 @@ docker compose logs -f grok2api
 
 ### 部署到 Railway（推荐生产环境）
 
+#### Docker 镜像
+
+GitHub Container Registry 上有预构建的镜像：
+
+| 镜像 | 标签 | Dockerfile | 适用场景 |
+|:--|:--|:--|:--|
+| **标准版** | `ghcr.io/wenjiazhu1980/grok2api:latest` | `Dockerfile` | 自托管 / docker compose |
+| **Railway 版** | `ghcr.io/wenjiazhu1980/grok2api:main-railway` | `Dockerfile.railway` | **Railway 部署**（无 cache mount） |
+
+**主要区别：**
+
+- `Dockerfile`：使用 `--mount=type=cache` 加速构建，适用支持 BuildKit 的自托管环境。不兼容 Railway 构建系统。
+- `Dockerfile.railway`：移除所有 `--mount=type=cache` 指令，内置 Python QualityGuard sidecar。适配 Railway 构建环境和纯环境变量配置。
+
+**使用预构建镜像快速部署到 Railway：**
+
+```bash
+# 方式一：Railway CLI
+railway service create --name grok2api
+railway variable set GROK2API_SECRETS_JWT_SECRET="$(openssl rand -hex 32)"
+railway variable set GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+railway variable set GROK2API_DATABASE_DRIVER=postgres
+railway variable set GROK2API_DATABASE_URL='${{Postgres.DATABASE_PRIVATE_URL}}'
+railway up --image ghcr.io/wenjiazhu1980/grok2api:main-railway
+
+# 方式二：Railway 控制台
+# 新建服务 → Docker Image → ghcr.io/wenjiazhu1980/grok2api:main-railway
+```
+
 Railway 提供持久化的 PostgreSQL 和 Redis 插件，适合需要数据持久化的生产部署。
 
 #### 前置条件
