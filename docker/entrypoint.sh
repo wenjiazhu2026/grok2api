@@ -124,4 +124,11 @@ else
     exit 1
 fi
 
+# Start QualityGuard sidecar in background if enabled
+if grep -qE '^[[:space:]]*enabled:[[:space:]]+true' /app/config.yaml 2>/dev/null; then
+    echo "Starting QualityGuard sidecar in background..." >&2
+    su-exec grok2api:grok2api /usr/local/bin/grok2api-quality-guard-start &
+    sleep 2
+fi
+
 exec su-exec grok2api:grok2api "$@"
