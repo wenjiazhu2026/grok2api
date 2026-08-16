@@ -264,13 +264,41 @@ Expected response: `{"ok":true}`
 
 ```
 Railway Service (grok2api)
+Railway Service (grok2api)
     │
-    └── Railway PostgreSQL Plugin (persistent)
-            └── Accounts, credentials, sessions, audit logs
-
-    └── Railway Volume (optional, for local media)
-            └── Media files (if GROK2API_MEDIA_LOCAL_PATH is set to /app/data/media)
+    ├── Railway PostgreSQL Plugin (persistent)
+    │       └── Accounts, credentials, sessions, audit logs
+    │
+    ├── Railway Volume (cooperative-unity-volume, mounted at /app/data/)
+    │       └── Media files (GROK2API_MEDIA_LOCAL_PATH=/app/data/media)
+    │
+    └── QualityGuard Sidecar (embedded, auto-started)
+            └── Egress quality monitoring & quarantine
 ```
+
+#### Enable QualityGuard (optional)
+
+QualityGuard is an embedded Python sidecar that monitors egress node quality and quarantines suspect nodes. It is automatically started when `qualityGuard.enabled` is true.
+
+**Prerequisite**: Configure at least one egress proxy node in the admin panel before enabling the guard.
+
+**Enable via environment variable:**
+
+```bash
+railway variable set GROK2API_QUALITY_GUARD_ENABLED=true
+```
+
+**Key QualityGuard variables:**
+
+| Variable | Default | Description |
+|:--|:--|:--|
+| `GROK2API_QUALITY_GUARD_ENABLED` | `false` | Enable quality guard (`true`/`false`) |
+| `GROK2API_QUALITY_GUARD_MODEL` | `grok-3.5` | Model for active probes |
+| `GROK2API_QUALITY_GUARD_MODE` | `active` | `passive`, `active`, or `hybrid` |
+| `GROK2API_QUALITY_GUARD_ACTIVE_INTERVAL` | `30m` | Interval between active probes |
+| `GROK2API_QUALITY_GUARD_SOFT_TPS` | `500` | Soft TPS threshold for quarantine |
+| `GROK2API_QUALITY_GUARD_HARD_TPS` | `1000` | Hard TPS threshold for immediate quarantine |
+| `GROK2API_QUALITY_GUARD_FAIL_CLOSED` | `false` | Quarantine before probe confirmation |
 
 #### Key environment variables reference
 
@@ -279,7 +307,7 @@ Railway Service (grok2api)
 | `GROK2API_DATABASE_DRIVER` | `sqlite` | `sqlite` or `postgres` |
 | `GROK2API_DATABASE_SQLITE_PATH` | `/tmp/backend.db` | SQLite path (ignored when using postgres) |
 | `GROK2API_RUNTIME_STORE_DRIVER` | `memory` | `memory` or `redis` |
-| `GROK2API_MEDIA_LOCAL_PATH` | `/tmp/media` | Local media storage path |
+| `GROK2API_MEDIA_LOCAL_PATH` | `/app/data/media` | Local media storage path |
 
 ### Run from source
 

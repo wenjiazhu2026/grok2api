@@ -267,12 +267,39 @@ curl https://<你的应用>.railway.app/healthz
 ```
 Railway Service (grok2api)
     │
-    └── Railway PostgreSQL 插件（持久化）
-            └── 账号、凭据、会话、审计日志
-
-    └── Railway Volume（可选，用于本地媒体）
-            └── 媒体文件（将 GROK2API_MEDIA_LOCAL_PATH 设为 /app/data/media）
+    ├── Railway PostgreSQL 插件（持久化）
+    │       └── 账号、凭据、会话、审计日志
+    │
+    ├── Railway Volume（cooperative-unity-volume，挂载在 /app/data/）
+    │       └── 媒体文件（GROK2API_MEDIA_LOCAL_PATH=/app/data/media）
+    │
+    └── QualityGuard Sidecar（内置，容器内自动启动）
+            └── 出口质量监控与隔离
 ```
+
+#### 启用 QualityGuard（可选）
+
+QualityGuard 是一个内置的 Python sidecar，用于监控出口节点质量并在异常时隔离节点。启用后会通过 entrypoint 后台自动启动，无需额外部署。
+
+**前置条件**：在管理端配置至少一个出口代理节点后再启用质量守护。
+
+**通过环境变量启用：**
+
+```bash
+railway variable set GROK2API_QUALITY_GUARD_ENABLED=true
+```
+
+**常用 QualityGuard 变量：**
+
+| 变量 | 默认值 | 说明 |
+|:--|:--|:--|
+| `GROK2API_QUALITY_GUARD_ENABLED` | `false` | 是否启用质量守护（`true`/`false`） |
+| `GROK2API_QUALITY_GUARD_MODEL` | `grok-3.5` | 活跃探测使用的模型 |
+| `GROK2API_QUALITY_GUARD_MODE` | `active` | 模式：`passive`、`active` 或 `hybrid` |
+| `GROK2API_QUALITY_GUARD_ACTIVE_INTERVAL` | `30m` | 活跃探测间隔 |
+| `GROK2API_QUALITY_GUARD_SOFT_TPS` | `500` | 软 TPS 阈值，超过后触发隔离 |
+| `GROK2API_QUALITY_GUARD_HARD_TPS` | `1000` | 硬 TPS 阈值，超过后立即隔离 |
+| `GROK2API_QUALITY_GUARD_FAIL_CLOSED` | `false` | 是否在确认前隔离节点 |
 
 #### 常用环境变量参考
 
@@ -281,7 +308,7 @@ Railway Service (grok2api)
 | `GROK2API_DATABASE_DRIVER` | `sqlite` | `sqlite` 或 `postgres` |
 | `GROK2API_DATABASE_SQLITE_PATH` | `/tmp/backend.db` | SQLite 路径（postgres 时忽略） |
 | `GROK2API_RUNTIME_STORE_DRIVER` | `memory` | `memory` 或 `redis` |
-| `GROK2API_MEDIA_LOCAL_PATH` | `/tmp/media` | 本地媒体存储路径 |
+| `GROK2API_MEDIA_LOCAL_PATH` | `/app/data/media` | 本地媒体存储路径 |
 
 ### 源码运行
 
