@@ -192,6 +192,95 @@ docker compose logs -f grok2api
 
 Open `http://127.0.0.1:8000`. The image already includes the frontend; SQLite data and local media are stored in the Compose volume.
 
+### Deploy on Railway (recommended for production)
+
+Railway provides persistent PostgreSQL and Redis add-ons, making it ideal for production deployments with data persistence requirements.
+
+#### Prerequisites
+
+- [Railway](https://railway.app) account
+- [Railway CLI](https://docs.railway.app/cli/installation) installed and authenticated
+
+#### Steps
+
+1. **Fork this repository** (or use [wenjiazhu1980/grok2api](https://github.com/wenjiazhu1980/grok2api) which includes Railway-specific optimizations)
+
+2. **Link your project**
+
+```bash
+railway init
+railway link --project <your-project-id>
+```
+
+3. **Add PostgreSQL database**
+
+```bash
+railway add --service postgres
+```
+
+Or add via Railway dashboard: **New → Database → Add PostgreSQL**
+
+4. **Configure environment variables** (set via Railway dashboard or CLI)
+
+| Variable | Description | Example |
+|:--|:--|:--|
+| `GROK2API_SECRETS_JWT_SECRET` | JWT secret (≥32 chars) | `openssl rand -hex 32` |
+| `GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY` | Encryption key (base64) | `openssl rand -base64 32` |
+| `GROK2API_BOOTSTRAP_ADMIN_PASSWORD` | Initial admin password | `YourStrongPassword123!` |
+| `GROK2API_DATABASE_DRIVER` | Database driver | `postgres` |
+| `GROK2API_DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/db` |
+| `GROK2API_AUTH_SECURE_COOKIES` | Secure cookies (HTTPS) | `true` |
+| `GROK2API_SERVER_SWAGGER_ENABLED` | Enable Swagger UI | `false` |
+
+Railway automatically injects `DATABASE_URL` when you add a PostgreSQL plugin. You can reference it in `GROK2API_DATABASE_URL` using Railway's variable syntax: `${{Postgres.DATABASE_PRIVATE_URL}}`, or copy the full connection string from the PostgreSQL plugin settings.
+
+5. **Connect repository**
+
+```bash
+railway service source connect --repo <your-repo> --branch main
+```
+
+Or via dashboard: **Settings → Source → Connect GitHub repo**
+
+Railway will automatically detect the `Dockerfile.railway` (which removes `--mount=type=cache` directives not supported by Railway) and build from it.
+
+6. **Deploy**
+
+Railway will trigger a deployment automatically on the next push. To deploy manually:
+
+```bash
+railway up
+```
+
+7. **Verify**
+
+```bash
+curl https://<your-app>.railway.app/healthz
+```
+
+Expected response: `{"ok":true}`
+
+#### Architecture on Railway
+
+```
+Railway Service (grok2api)
+    │
+    └── Railway PostgreSQL Plugin (persistent)
+            └── Accounts, credentials, sessions, audit logs
+
+    └── Railway Volume (optional, for local media)
+            └── Media files (if GROK2API_MEDIA_LOCAL_PATH is set to /app/data/media)
+```
+
+#### Key environment variables reference
+
+| Variable | Default | Description |
+|:--|:--|:--|
+| `GROK2API_DATABASE_DRIVER` | `sqlite` | `sqlite` or `postgres` |
+| `GROK2API_DATABASE_SQLITE_PATH` | `/tmp/backend.db` | SQLite path (ignored when using postgres) |
+| `GROK2API_RUNTIME_STORE_DRIVER` | `memory` | `memory` or `redis` |
+| `GROK2API_MEDIA_LOCAL_PATH` | `/tmp/media` | Local media storage path |
+
 ### Run from source
 
 ```bash

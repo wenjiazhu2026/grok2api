@@ -193,6 +193,96 @@ docker compose logs -f grok2api
 
 访问 `http://127.0.0.1:8000`。镜像已包含前端，SQLite 数据库与本地媒体保存在 Compose 数据卷中。
 
+### 部署到 Railway（推荐生产环境）
+
+Railway 提供持久化的 PostgreSQL 和 Redis 插件，适合需要数据持久化的生产部署。
+
+#### 前置条件
+
+- [Railway](https://railway.app) 账号
+- 已安装并登录 [Railway CLI](https://docs.railway.app/cli/installation)
+
+#### 部署步骤
+
+1. **Fork 本仓库**（或直接使用已包含 Railway 优化的 [wenjiazhu1980/grok2api](https://github.com/wenjiazhu1980/grok2api)）
+
+2. **关联项目**
+
+```bash
+railway init
+railway link --project <你的项目ID>
+```
+
+3. **添加 PostgreSQL 数据库**
+
+```bash
+railway add --service postgres
+```
+
+或在控制台操作：**New → Database → Add PostgreSQL**
+
+4. **配置环境变量**（可在控制台或 CLI 设置）
+
+| 变量 | 说明 | 示例 |
+|:--|:--|:--|
+| `GROK2API_SECRETS_JWT_SECRET` | JWT 密钥（≥32 字符） | `openssl rand -hex 32` |
+| `GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY` | 凭据加密密钥（Base64） | `openssl rand -base64 32` |
+| `GROK2API_BOOTSTRAP_ADMIN_PASSWORD` | 初始管理员密码 | `YourStrongPassword123!` |
+| `GROK2API_DATABASE_DRIVER` | 数据库驱动 | `postgres` |
+| `GROK2API_DATABASE_URL` | PostgreSQL 连接串 | `postgresql://user:pass@host:5432/db` |
+| `GROK2API_AUTH_SECURE_COOKIES` | HTTPS 下启用安全 Cookie | `true` |
+| `GROK2API_SERVER_SWAGGER_ENABLED` | 是否启用 Swagger | `false` |
+
+> [!IMPORTANT]
+> 添加 PostgreSQL 插件后 Railway 会自动注入 `DATABASE_URL` 变量。`GROK2API_DATABASE_URL` 可以直接引用该变量：`${{Postgres.DATABASE_PRIVATE_URL}}`，也可从插件设置页复制完整连接串。如果 CLI 未解析引用语法，请直接填写完整连接串。
+
+5. **连接仓库**
+
+```bash
+railway service source connect --repo <你的仓库> --branch main
+```
+
+或在控制台：**Settings → Source → Connect GitHub repo**
+
+Railway 会自动识别 `Dockerfile.railway`（已移除 Railway 不支持的 `--mount=type=cache` 指令）并从该文件构建。
+
+6. **部署**
+
+推送代码后 Railway 会自动触发部署；也可以手动触发：
+
+```bash
+railway up
+```
+
+7. **验证**
+
+```bash
+curl https://<你的应用>.railway.app/healthz
+```
+
+预期返回：`{"ok":true}`
+
+#### Railway 架构示意
+
+```
+Railway Service (grok2api)
+    │
+    └── Railway PostgreSQL 插件（持久化）
+            └── 账号、凭据、会话、审计日志
+
+    └── Railway Volume（可选，用于本地媒体）
+            └── 媒体文件（将 GROK2API_MEDIA_LOCAL_PATH 设为 /app/data/media）
+```
+
+#### 常用环境变量参考
+
+| 变量 | 默认值 | 说明 |
+|:--|:--|:--|
+| `GROK2API_DATABASE_DRIVER` | `sqlite` | `sqlite` 或 `postgres` |
+| `GROK2API_DATABASE_SQLITE_PATH` | `/tmp/backend.db` | SQLite 路径（postgres 时忽略） |
+| `GROK2API_RUNTIME_STORE_DRIVER` | `memory` | `memory` 或 `redis` |
+| `GROK2API_MEDIA_LOCAL_PATH` | `/tmp/media` | 本地媒体存储路径 |
+
 ### 源码运行
 
 ```bash
