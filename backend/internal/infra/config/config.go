@@ -66,7 +66,18 @@ const (
 	
 	// Routing
 	ReasoningReplayEnabledEnv   = "GROK2API_ROUTING_REASONING_REPLAY_ENABLED"
-	
+
+	// QualityGuard
+	QualityGuardEnabledEnv        = "GROK2API_QUALITY_GUARD_ENABLED"
+	QualityGuardModelEnv          = "GROK2API_QUALITY_GUARD_MODEL"
+	QualityGuardModeEnv           = "GROK2API_QUALITY_GUARD_MODE"
+	QualityGuardActiveIntervalEnv = "GROK2API_QUALITY_GUARD_ACTIVE_INTERVAL"
+	QualityGuardSoftTPSEnv       = "GROK2API_QUALITY_GUARD_SOFT_TPS"
+	QualityGuardHardTPSEnv       = "GROK2API_QUALITY_GUARD_HARD_TPS"
+	QualityGuardFailClosedEnv    = "GROK2API_QUALITY_GUARD_FAIL_CLOSED"
+	QualityGuardRotationURLEnv    = "GROK2API_QUALITY_GUARD_ROTATION_URL"
+	QualityGuardRotationTokenEnv  = "GROK2API_QUALITY_GUARD_ROTATION_TOKEN"
+
 	// Statsig mode
 	StatsigModeManual           = "manual"
 	StatsigModeURL              = "url"
@@ -582,6 +593,45 @@ func applyEnvironmentOverrides(cfg *Config) error {
 		if enabled, ok := parseBool(value); ok {
 			cfg.Routing.ReasoningReplayEnabled = enabled
 		}
+	}
+
+	// === QualityGuard Config ===
+	if value := strings.TrimSpace(os.Getenv(QualityGuardEnabledEnv)); value != "" {
+		if enabled, ok := parseBool(value); ok {
+			cfg.QualityGuard.Enabled = enabled
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(QualityGuardModelEnv)); value != "" {
+		cfg.QualityGuard.Model = value
+	}
+	if value := strings.TrimSpace(os.Getenv(QualityGuardModeEnv)); value != "" {
+		cfg.QualityGuard.Mode = value
+	}
+	if value := strings.TrimSpace(os.Getenv(QualityGuardActiveIntervalEnv)); value != "" {
+		if d, err := time.ParseDuration(value); err == nil {
+			cfg.QualityGuard.ActiveInterval = Duration(d)
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(QualityGuardSoftTPSEnv)); value != "" {
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			cfg.QualityGuard.SoftTPS = f
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(QualityGuardHardTPSEnv)); value != "" {
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			cfg.QualityGuard.HardTPS = f
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(QualityGuardFailClosedEnv)); value != "" {
+		if failClosed, ok := parseBool(value); ok {
+			cfg.QualityGuard.FailClosed = failClosed
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(QualityGuardRotationURLEnv)); value != "" {
+		cfg.QualityGuard.RotationURL = value
+	}
+	if value := strings.TrimSpace(os.Getenv(QualityGuardRotationTokenEnv)); value != "" {
+		cfg.QualityGuard.RotationToken = value
 	}
 
 	return nil
