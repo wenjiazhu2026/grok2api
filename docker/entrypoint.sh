@@ -71,6 +71,10 @@ database:
   driver: "${GROK2API_DATABASE_DRIVER}"
   sqlite:
     path: "${GROK2API_DATABASE_SQLITE_PATH}"
+  postgres:
+    dsn: "${GROK2API_DATABASE_URL:-}"
+    maxOpenConns: 50
+    maxIdleConns: 10
 
 runtimeStore:
   driver: "${GROK2API_RUNTIME_STORE_DRIVER}"
