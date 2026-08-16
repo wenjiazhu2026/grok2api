@@ -37,11 +37,11 @@ elif [ -n "${GROK2API_SECRETS_JWT_SECRET}" ] && [ -n "${GROK2API_SECRETS_CREDENT
     : "${GROK2API_DEPLOYMENT_INSTANCE_ID:=}"
     : "${GROK2API_DEPLOYMENT_CLUSTER_ID:=grok2api}"
     : "${GROK2API_MEDIA_DRIVER:=local}"
-    : "${GROK2API_MEDIA_LOCAL_PATH:=/tmp/media}"
+    : "${GROK2API_MEDIA_LOCAL_PATH:=/app/data/media}"
     : "${GROK2API_ROUTING_REASONING_REPLAY_ENABLED:=true}"
 
-    mkdir -p /tmp/media
-    chown grok2api:grok2api /tmp/backend.db /tmp/media 2>/dev/null || true
+    mkdir -p /app/data/media
+    chown -R grok2api:grok2api /app/data
 
     cat > /app/config.yaml << CONFIG
 server:
