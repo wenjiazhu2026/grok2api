@@ -519,6 +519,86 @@ func TestReasoningReplayScopeSharesAccountSeparatesPlane(t *testing.T) {
 	}
 }
 
+func TestConversationReasoningReplaySharesExplicitSessionAcrossAccounts(t *testing.T) {
+	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := cipher.Encrypt("access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewAdapter(Config{BaseURL: "https://build.example/v1"}, cipher)
+	var requestCount int
+	var secondRequest map[string]any
+	adapter.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requestCount++
+		body, readErr := io.ReadAll(request.Body)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if requestCount == 2 {
+			if err := json.Unmarshal(body, &secondRequest); err != nil {
+				return nil, err
+			}
+		}
+		responseBody := `{"id":"resp_first","model":"grok-4.6","status":"completed","output":[{"id":"rs_first","type":"reasoning","status":"completed","encrypted_content":"portable-proof"},{"id":"fc_first","type":"function_call","call_id":"call_portable","name":"list_dir","arguments":"{}"}]}`
+		if requestCount > 1 {
+			responseBody = `{"id":"resp_second","model":"grok-4.6","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK",
+			Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body:   io.NopCloser(strings.NewReader(responseBody)), Request: request,
+		}, nil
+	})
+	firstRequest := provider.ResponseResourceRequest{
+		Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, EncryptedAccessToken: encrypted},
+		Method:     http.MethodPost, Path: "/responses", Model: "grok-4.6", Operation: conversation.OperationChat,
+		ReasoningReplayKey: "portable-session", NormalizeBody: true,
+		Body: []byte(`{"model":"public","messages":[{"role":"user","content":"hello"}]}`),
+	}
+	first, err := adapter.ForwardResponse(context.Background(), firstRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(first.Body); err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Body.Close()
+	secondRequestInput := firstRequest
+	secondRequestInput.Credential.ID = 2
+	secondRequestInput.Body = []byte(`{"model":"public","messages":[{"role":"user","content":"hello"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_portable","type":"function","function":{"name":"list_dir","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_portable","content":"ok"}]}`)
+	second, err := adapter.ForwardResponse(context.Background(), secondRequestInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Body.Close()
+	if requestCount != 2 {
+		t.Fatalf("upstream request count = %d, want 2", requestCount)
+	}
+	input, ok := secondRequest["input"].([]any)
+	if !ok {
+		t.Fatalf("second upstream input = %#v", secondRequest["input"])
+	}
+	found := false
+	for _, raw := range input {
+		item, ok := raw.(map[string]any)
+		if ok && item["type"] == "reasoning" && item["encrypted_content"] == "portable-proof" {
+			found = true
+			if _, hasContent := item["content"]; hasContent {
+				t.Fatalf("replayed opaque reasoning contains content: %#v", item)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("portable reasoning was not restored: %#v", input)
+	}
+	if firstScope := adapter.conversationReasoningScope(firstRequest, adapter.primaryBaseURL()); firstScope == "" || firstScope != adapter.conversationReasoningScope(secondRequestInput, adapter.primaryBaseURL()) {
+		t.Fatal("conversation reasoning scope unexpectedly depends on account")
+	}
+}
+
 func TestListModelsUsesOfficialMetadataHeaders(t *testing.T) {
 	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
 	if err != nil {
@@ -1009,6 +1089,74 @@ func TestForwardResponseRestoresNamespaceResponse(t *testing.T) {
 	tools := payload["tools"].([]any)
 	if len(tools) != 1 || tools[0].(map[string]any)["type"] != "namespace" {
 		t.Fatalf("下游 tools = %#v", tools)
+	}
+}
+
+func TestForwardResponseAliasesTopLevelViewImageForBuild(t *testing.T) {
+	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := cipher.Encrypt("access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewAdapter(Config{BaseURL: "https://cli-chat-proxy.grok.com/v1"}, cipher)
+	adapter.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		tools, ok := payload["tools"].([]any)
+		if !ok || len(tools) != 1 || tools[0].(map[string]any)["name"] != "grok2api_view_image" {
+			t.Fatalf("Build tools = %#v", payload["tools"])
+		}
+		if payload["tool_choice"] != "auto" {
+			t.Fatalf("Build tool_choice = %#v", payload["tool_choice"])
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK",
+			Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{
+				"id":"resp_view_image",
+				"tools":[{"type":"function","name":"grok2api_view_image"}],
+				"output":[{"type":"function_call","call_id":"call_1","name":"grok2api_view_image","arguments":"{}"}]
+			}`)),
+			Request: request,
+		}, nil
+	})
+
+	response, err := adapter.ForwardResponse(context.Background(), provider.ResponseResourceRequest{
+		Credential: account.Credential{ID: 8, EncryptedAccessToken: encrypted},
+		Method:     http.MethodPost, Path: "/responses", Model: "grok-4.6",
+		NormalizeBody: true, Operation: conversation.OperationResponses,
+		Body: []byte(`{
+			"model":"grok-4.6","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
+			"tools":[{"type":"function","name":"view_image","description":"View a local image","parameters":{"type":"object","properties":{},"required":[]}}],
+			"tool_choice":"auto"
+		}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	if response.Header.Get("X-Grok2API-Compatibility-Warnings") != "view_image_name_normalized" {
+		t.Fatalf("compatibility warnings = %q", response.Header.Get("X-Grok2API-Compatibility-Warnings"))
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	call := payload["output"].([]any)[0].(map[string]any)
+	if call["name"] != "view_image" {
+		t.Fatalf("client function call = %#v", call)
+	}
+	visibleTools := payload["tools"].([]any)
+	if visibleTools[0].(map[string]any)["name"] != "view_image" {
+		t.Fatalf("client tools = %#v", visibleTools)
 	}
 }
 

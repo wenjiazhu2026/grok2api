@@ -22,11 +22,22 @@ func ConvertRequest(body []byte, model, operation string) ([]byte, error) {
 
 // ConvertRequestWithOptions 同时返回下游协议特有的响应语义，供 JSON/SSE 转换阶段使用。
 func ConvertRequestWithOptions(body []byte, model, operation string) ([]byte, ResponseOptions, error) {
+	return convertRequestWithReasoningReplay(body, model, operation, nil, "")
+}
+
+// ConvertRequestWithReasoningReplay is used by providers that can establish a
+// trusted client-session scope. It keeps the public conversion path stateless
+// when no such scope is available.
+func ConvertRequestWithReasoningReplay(body []byte, model, operation string, cache *ReasoningCache, scope string) ([]byte, ResponseOptions, error) {
+	return convertRequestWithReasoningReplay(body, model, operation, cache, scope)
+}
+
+func convertRequestWithReasoningReplay(body []byte, model, operation string, cache *ReasoningCache, scope string) ([]byte, ResponseOptions, error) {
 	switch operation {
 	case OperationChat:
-		return convertChatRequest(body, model)
+		return convertChatRequestWithReasoningReplay(body, model, cache, scope)
 	case OperationMessages:
-		return convertMessagesRequest(body, model)
+		return convertMessagesRequestWithReasoningReplay(body, model, cache, scope)
 	default:
 		converted, err := replaceModel(body, model)
 		return converted, ResponseOptions{}, err

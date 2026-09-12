@@ -3,11 +3,15 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 )
 
 func normalizeResponsesTools(payload map[string]json.RawMessage) (*responsesToolCompatibility, error) {
+	if rawTools := payload["tools"]; len(rawTools) > 0 && strings.Contains(string(rawTools), "automation_update") {
+		slog.Info("DEBUG_RAW_AUTOMATION_TOOLS", "tools", string(rawTools))
+	}
 	compatibility := newResponsesToolCompatibility()
 	tools, hasTools, err := decodeOptionalArray(payload["tools"], "tools")
 	if err != nil {
@@ -66,6 +70,9 @@ func normalizeResponsesTools(payload map[string]json.RawMessage) (*responsesTool
 			compatibility.addWarning("parallel_tool_calls_without_tools_ignored")
 		}
 		compatibility.changed = true
+	}
+	if rawTools := payload["tools"]; len(rawTools) > 0 && strings.Contains(string(rawTools), "automation_update") {
+		slog.Info("DEBUG_NORMALIZED_AUTOMATION_TOOLS", "tools", string(rawTools))
 	}
 	if err := compatibility.normalizeToolChoice(payload, normalizedTools); err != nil {
 		return nil, err
@@ -172,6 +179,15 @@ func (c *responsesToolCompatibility) normalizeTool(raw any, namespace string, cl
 			return nil, nil
 		}
 		converted := cloneJSONObject(tool)
+		if inputSchema, exists := converted["inputSchema"]; exists {
+			converted["parameters"] = inputSchema
+			delete(converted, "inputSchema")
+			c.changed = true
+		} else if inputSchema, exists := converted["input_schema"]; exists {
+			converted["parameters"] = inputSchema
+			delete(converted, "input_schema")
+			c.changed = true
+		}
 		if parameters, exists := converted["parameters"]; exists {
 			normalized, changed, normalizeErr := normalizeBuildFunctionParametersRootForTool(parameters, param+".parameters", name)
 			if normalizeErr != nil {
@@ -184,7 +200,13 @@ func (c *responsesToolCompatibility) normalizeTool(raw any, namespace string, cl
 			}
 		}
 		identity := responsesToolIdentity{Kind: responsesFunctionTool, Namespace: namespace, Name: name}
-		alias := c.alias(identity)
+		alias := c.functionAlias(identity)
+		if alias != name {
+			c.changed = true
+			if strings.EqualFold(name, "view_image") && namespace == "" {
+				c.addWarning("view_image_name_normalized")
+			}
+		}
 		if parameters, exists := tool["parameters"]; exists && schemaContainsInteger(parameters) {
 			c.functionSchemas[alias] = cloneJSONValue(parameters)
 		}
@@ -405,6 +427,26 @@ func (c *rootObjectLeafCollector) walk(node any, constraints []map[string]any, s
 			constraints = append(cloneRootConstraints(constraints), sibling)
 		}
 		for _, branch := range branches {
+			// Build function parameters may contain a nullable or otherwise
+			// non-object alternative at the root. Such alternatives cannot be
+			// represented by Build's grammar and are intentionally omitted; the
+			// whole schema is rejected below when no object leaf remains.
+			branchSchema, branchOK := branch.(map[string]any)
+			if !branchOK || isNullOnlySchema(branchSchema) {
+				c.changed = true
+				continue
+			}
+			branchKeyword, _, branchErr := rootUnion(branchSchema)
+			if branchErr != nil {
+				return invalidBuildFunctionParametersRoot(c.context)
+			}
+			// A root $ref may point to another union (for example a named
+			// Create schema). Let walk resolve it before deciding whether its
+			// leaves are object schemas.
+			if branchKeyword == "" && branchSchema["$ref"] == nil && !isObjectRootSchema(branchSchema, c.doc, nil) {
+				c.changed = true
+				continue
+			}
 			if err := c.walk(branch, constraints, cloneRefSeen(seen), depth+1, unionDepth+1); err != nil {
 				return err
 			}
@@ -881,4 +923,21 @@ func (c *responsesToolCompatibility) buildClientSearchFunction() (map[string]any
 		"type": "function", "name": c.alias(identity), "description": description,
 		"parameters": cloneJSONValue(parameters),
 	}, nil
+}
+
+func dedupeSlice(slice []any) []any {
+	seen := make(map[string]bool)
+	var result []any
+	for _, item := range slice {
+		str, ok := item.(string)
+		if ok {
+			if !seen[str] {
+				seen[str] = true
+				result = append(result, str)
+			}
+		} else {
+			result = append(result, item)
+		}
+	}
+	return result
 }

@@ -67,10 +67,6 @@ type streamConverter struct {
 	thinkingIndex          int
 	thinkingItemID         string
 	chatReasoningMark      bool
-	reasoningEvidenceBytes int
-	reasoningItems         map[string]*reasoningStreamState
-	reasoningOrder         []string
-	activeReasoningID      string
 	nextIndex              int
 	tools                  map[string]streamTool
 	webSearch              []webSearchCall
@@ -82,7 +78,17 @@ type streamConverter struct {
 	stopFilter             *anthropicStreamStopFilter
 	stopSequence           string
 	refused                bool
+	reasoningEvidenceBytes int
+	reasoningItems         map[string]*reasoningStreamState
+	reasoningOrder         []string
+	activeReasoningID      string
 	repeatTracker          streamRepeatTracker
+	// terminalEvent distinguishes a normal Responses terminal frame from a
+	// transport EOF. EOF is still converted to the legacy downstream terminator
+	// for compatibility, but it must not make a truncated tool turn replayable.
+	terminalEvent bool
+	outputItems   []responseItem
+	outputItemIDs map[string]struct{}
 }
 
 // streamRepeatTracker 在协议转换、缓冲和 stop filter 之前跟踪上游增量，
@@ -143,6 +149,7 @@ func newStreamConverter(writer io.Writer, operation string, options ResponseOpti
 	return &streamConverter{
 		writer: writer, operation: operation, created: time.Now().Unix(), tools: make(map[string]streamTool),
 		webSearchEmitted: make(map[string]bool),
+		outputItemIDs:    make(map[string]struct{}),
 		reasoningItems:   make(map[string]*reasoningStreamState),
 		deferSearchText:  operation == OperationMessages && options.AnthropicWebSearch,
 		options:          options, stopFilter: newAnthropicStreamStopFilter(options.StopSequences),
@@ -379,6 +386,7 @@ func (c *streamConverter) handle(event string, data []byte) error {
 	case "response.output_item.done":
 		var item responseItem
 		_ = json.Unmarshal(root["item"], &item)
+		c.recordOutputItem(item)
 		if item.Type == "function_call" {
 			return c.toolArgumentsDone(item.ID, item.Arguments)
 		}
@@ -401,6 +409,11 @@ func (c *streamConverter) handle(event string, data []byte) error {
 	case "response.completed", "response.incomplete":
 		var response responseEnvelope
 		_ = json.Unmarshal(root["response"], &response)
+		// Some upstream streams omit output_item.done and put the complete
+		// reasoning/function_call objects only in the terminal envelope. Record
+		// those objects before done() commits the replay cache.
+		c.recordReplayOutput(response.Output)
+		response.Output = c.mergeOutputItems(response.Output)
 		c.setResponse(response)
 		for _, item := range response.Output {
 			if item.Type == "reasoning" {
@@ -421,11 +434,182 @@ func (c *streamConverter) handle(event string, data []byte) error {
 		if status == "" && typeName == "response.incomplete" {
 			status = "incomplete"
 		}
+		c.terminalEvent = true
 		return c.done(status)
 	case "error", "response.failed":
 		return c.streamError(data)
 	}
 	return nil
+}
+
+// recordOutputItem retains the authoritative item-done payload. In streamed
+// Responses, response.completed often contains usage/status only and an empty
+// output array, while encrypted reasoning is present solely in these events.
+func (c *streamConverter) recordOutputItem(item responseItem) {
+	if c == nil || (item.Type != "reasoning" && item.Type != "function_call") {
+		return
+	}
+	if c.outputItemIDs == nil {
+		c.outputItemIDs = make(map[string]struct{})
+	}
+	key := replayOutputKey(item)
+	if key != "" {
+		if _, exists := c.outputItemIDs[key]; exists {
+			for index := range c.outputItems {
+				if replayOutputKey(c.outputItems[index]) == key {
+					c.outputItems[index] = mergeResponseItem(c.outputItems[index], item)
+					return
+				}
+			}
+		}
+		c.outputItemIDs[key] = struct{}{}
+	}
+	c.outputItems = append(c.outputItems, cloneResponseItem(item))
+}
+
+func replayOutputKey(item responseItem) string {
+	if id := strings.TrimSpace(item.ID); id != "" {
+		return "id:" + id
+	}
+	if item.Type == "function_call" {
+		if callID := strings.TrimSpace(item.CallID); callID != "" {
+			return "call:" + normalizeReasoningCallID(callID)
+		}
+	}
+	if item.Type == "reasoning" {
+		if encrypted := strings.TrimSpace(item.Encrypted); encrypted != "" {
+			return "proof:" + encrypted
+		}
+	}
+	return ""
+}
+
+// recordReplayOutput merges the terminal envelope into the items observed in
+// output_item.done. The event stream carries the authoritative output order;
+// the terminal envelope is used to fill richer fields and append items that
+// were never announced as done.
+func (c *streamConverter) recordReplayOutput(output []responseItem) {
+	if c == nil || len(output) == 0 {
+		return
+	}
+	merged := make([]responseItem, 0, len(c.outputItems)+len(output))
+	if len(c.outputItems) == 0 {
+		for _, item := range output {
+			if item.Type == "reasoning" || item.Type == "function_call" {
+				merged = append(merged, cloneResponseItem(item))
+			}
+		}
+	} else {
+		terminal := make(map[string]responseItem, len(output))
+		for _, item := range output {
+			if item.Type == "reasoning" || item.Type == "function_call" {
+				if key := replayOutputKey(item); key != "" {
+					terminal[key] = item
+				}
+			}
+		}
+		seen := make(map[string]struct{}, len(c.outputItems)+len(output))
+		for _, item := range c.outputItems {
+			key := replayOutputKey(item)
+			if key != "" {
+				if update, ok := terminal[key]; ok {
+					item = mergeResponseItem(item, update)
+				}
+				seen[key] = struct{}{}
+			}
+			merged = append(merged, cloneResponseItem(item))
+		}
+		for _, item := range output {
+			if item.Type != "reasoning" && item.Type != "function_call" {
+				continue
+			}
+			key := replayOutputKey(item)
+			if key != "" {
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+			}
+			merged = append(merged, cloneResponseItem(item))
+		}
+	}
+	c.outputItems = merged
+	c.outputItemIDs = make(map[string]struct{}, len(merged))
+	for _, item := range merged {
+		if key := replayOutputKey(item); key != "" {
+			c.outputItemIDs[key] = struct{}{}
+		}
+	}
+}
+
+func (c *streamConverter) commitReasoningReplay() {
+	if c == nil || c.options.reasoningCache == nil || strings.TrimSpace(c.options.reasoningScope) == "" || len(c.outputItems) == 0 {
+		return
+	}
+	c.options.reasoningCache.RememberReasoningForEnvelope(c.options.reasoningScope, responseEnvelope{Output: c.outputItems})
+}
+
+func (c *streamConverter) mergeOutputItems(output []responseItem) []responseItem {
+	if len(c.outputItems) == 0 {
+		return output
+	}
+	if len(output) == 0 {
+		return append([]responseItem(nil), c.outputItems...)
+	}
+	merged := append([]responseItem(nil), output...)
+	for _, item := range c.outputItems {
+		found := false
+		if key := replayOutputKey(item); key != "" {
+			for index := range merged {
+				if replayOutputKey(merged[index]) == key {
+					merged[index] = mergeResponseItem(merged[index], item)
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			merged = append(merged, item)
+		}
+	}
+	return merged
+}
+
+func mergeResponseItem(base, update responseItem) responseItem {
+	if base.ID == "" {
+		base.ID = update.ID
+	}
+	if base.Type == "" {
+		base.Type = update.Type
+	}
+	if base.Status == "" {
+		base.Status = update.Status
+	}
+	if base.Role == "" {
+		base.Role = update.Role
+	}
+	if base.CallID == "" {
+		base.CallID = update.CallID
+	}
+	if base.Name == "" {
+		base.Name = update.Name
+	}
+	if base.Arguments == "" {
+		base.Arguments = update.Arguments
+	}
+	if base.Encrypted == "" {
+		base.Encrypted = update.Encrypted
+	}
+	if len(base.Content) == 0 {
+		base.Content = update.Content
+	}
+	if len(base.Summary) == 0 {
+		base.Summary = update.Summary
+	}
+	if base.Action == nil {
+		base.Action = update.Action
+	}
+	return base
 }
 
 func (c *streamConverter) reasoningOutputEnabled() bool {
@@ -674,13 +858,23 @@ func (c *streamConverter) done(status string) error {
 	if err := c.start(); err != nil {
 		return err
 	}
+	var err error
 	if err := c.flushPendingReasoning(); err != nil {
 		return err
 	}
 	if c.operation == OperationChat {
-		return c.doneChat(status)
+		err = c.doneChat(status)
+	} else {
+		err = c.doneMessages(status)
 	}
-	return c.doneMessages(status)
+	if err == nil && c.terminalEvent {
+		// Commit only after the downstream terminal event was written. If the
+		// upstream failed, the client abandoned the pipe, or the source ended
+		// without a terminal Responses event, a partially observed tool turn must
+		// not become replayable state.
+		c.commitReasoningReplay()
+	}
+	return err
 }
 
 func (c *streamConverter) streamError(data []byte) error {

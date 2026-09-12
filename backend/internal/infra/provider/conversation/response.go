@@ -21,6 +21,20 @@ type ResponseOptions struct {
 	Include []string
 	// InlineCitations overrides Include when non-nil.
 	InlineCitations *bool
+	// reasoningCache and reasoningScope are intentionally populated only by a
+	// provider that has a trusted, isolated client-session identity. A raw
+	// call_id is not sufficient to restore encrypted reasoning safely.
+	reasoningCache *ReasoningCache
+	reasoningScope string
+}
+
+// WithReasoningReplay attaches a provider-owned, scoped reasoning cache to
+// the conversion options. The scope must include the client session and the
+// upstream plane; an empty scope disables the bridge.
+func (o ResponseOptions) WithReasoningReplay(cache *ReasoningCache, scope string) ResponseOptions {
+	o.reasoningCache = cache
+	o.reasoningScope = scope
+	return o
 }
 
 // InlineCitationsEnabled reports whether [[N]](url) markers should be embedded.
@@ -128,6 +142,7 @@ func ConvertResponseJSONWithOptions(body []byte, operation string, options Respo
 		}
 		return body, nil
 	}
+	options.reasoningCache.RememberReasoningForEnvelope(options.reasoningScope, envelope)
 	parsed := parseResponse(envelope)
 	if operation == OperationMessages || operation == OperationChat {
 		parsed.Text, parsed.StopSequence = applyStopSequences(parsed.Text, options.StopSequences)

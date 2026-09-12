@@ -114,6 +114,59 @@ func TestCatalogContainsAllConsoleModelsAndAliases(t *testing.T) {
 	}
 }
 
+func TestConsoleToolChoiceRequiresNonEmptyTools(t *testing.T) {
+	for name, payload := range map[string]map[string]any{
+		"missing tools": {"tool_choice": "auto"},
+		"nil tools":     {"tools": nil, "tool_choice": "required"},
+		"empty tools":   {"tools": []any{}, "tool_choice": "auto"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ensureConsoleToolChoicePair(payload)
+			if _, exists := payload["tool_choice"]; exists {
+				t.Fatalf("tool_choice remained without tools: %#v", payload)
+			}
+		})
+	}
+
+	payload := map[string]any{
+		"tools":       []any{map[string]any{"type": "web_search"}},
+		"tool_choice": "auto",
+	}
+	ensureConsoleToolChoicePair(payload)
+	if payload["tool_choice"] != "auto" || len(payload["tools"].([]any)) != 1 {
+		t.Fatalf("valid tool/tool_choice pair was changed: %#v", payload)
+	}
+}
+
+func TestNormalizeRequestDropsToolChoiceWhenToolsEmpty(t *testing.T) {
+	spec, ok := Resolve("grok-4.5")
+	if !ok {
+		t.Fatal("grok-4.5 missing")
+	}
+	for name, body := range map[string]string{
+		"missing tools": `{"model":"public","input":"hello","tool_choice":"auto"}`,
+		"null tools":    `{"model":"public","input":"hello","tools":null,"tool_choice":"none"}`,
+		"empty tools":   `{"model":"public","input":"hello","tools":[],"tool_choice":"required"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			normalized, err := normalizeRequest([]byte(body), spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(normalized, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := payload["tools"]; exists {
+				t.Fatalf("tools remained without declarations: %#v", payload)
+			}
+			if _, exists := payload["tool_choice"]; exists {
+				t.Fatalf("tool_choice remained without tools: %#v", payload)
+			}
+		})
+	}
+}
+
 func TestConsoleVoiceErrorIsSanitizedAndPreservesRetryMetadata(t *testing.T) {
 	response := &http.Response{
 		StatusCode: http.StatusTooManyRequests,

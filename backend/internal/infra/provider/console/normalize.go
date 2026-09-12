@@ -52,7 +52,22 @@ func normalizeRequestWithMetadata(body []byte, spec ModelSpec, metadata *provide
 		return nil, err
 	}
 	normalizeConsoleToolChoice(payload, retainedClientTools)
+	ensureConsoleToolChoicePair(payload)
 	return json.Marshal(payload)
+}
+
+// ensureConsoleToolChoicePair enforces the upstream invariant that tool_choice
+// may only be sent when at least one valid tool declaration is present.
+func ensureConsoleToolChoicePair(payload map[string]any) {
+	choice, hasChoice := payload["tool_choice"]
+	if !hasChoice || choice == nil {
+		return
+	}
+	tools, ok := payload["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		delete(payload, "tools")
+		delete(payload, "tool_choice")
+	}
 }
 
 func hasRecognizedConsoleReasoningEffort(payload map[string]any) bool {
