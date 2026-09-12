@@ -177,7 +177,7 @@ Each Provider keeps its own credentials, quota, health, cooldown, concurrency, a
 Official images support `linux/amd64` and `linux/arm64`.
 
 ```bash
-git clone https://github.com/chenyme/grok2api.git
+git clone https://github.com/wenjiazhu2026/grok2api.git
 cd grok2api
 cp config.example.yaml config.yaml
 ```
@@ -217,8 +217,8 @@ Pre-built images are available on GitHub Container Registry:
 
 | Image | Tags | Dockerfile | Use case |
 |:--|:--|:--|:--|
-| **Standard** | `ghcr.io/wenjiazhu1980/grok2api:latest` | `Dockerfile` | Self-hosting with `docker compose` |
-| **Railway** | `ghcr.io/wenjiazhu1980/grok2api:main-railway` | `Dockerfile.railway` | **Railway deployment** (no cache mounts) |
+| **Standard** | `ghcr.io/wenjiazhu2026/grok2api:latest` | `Dockerfile` | Self-hosting with `docker compose` |
+| **Railway** | `ghcr.io/wenjiazhu2026/grok2api:main-railway` | `Dockerfile.railway` | **Railway deployment** (no cache mounts) |
 
 **Key differences:**
 
@@ -234,10 +234,10 @@ railway variable set GROK2API_SECRETS_JWT_SECRET="$(openssl rand -hex 32)"
 railway variable set GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 railway variable set GROK2API_DATABASE_DRIVER=postgres
 railway variable set GROK2API_DATABASE_URL='${{Postgres.DATABASE_PRIVATE_URL}}'
-railway up --image ghcr.io/wenjiazhu1980/grok2api:main-railway
+railway up --image ghcr.io/wenjiazhu2026/grok2api:main-railway
 
 # Option 2: Railway Dashboard
-# New Service → Docker Image → ghcr.io/wenjiazhu1980/grok2api:main-railway
+# New Service → Docker Image → ghcr.io/wenjiazhu2026/grok2api:main-railway
 ```
 
 Railway provides persistent PostgreSQL and Redis add-ons, making it ideal for production deployments with data persistence requirements.

@@ -165,7 +165,7 @@ flowchart LR
 官方镜像支持 `linux/amd64` 和 `linux/arm64`。
 
 ```bash
-git clone https://github.com/chenyme/grok2api.git
+git clone https://github.com/wenjiazhu2026/grok2api.git
 cd grok2api
 cp config.example.yaml config.yaml
 ```
@@ -205,8 +205,8 @@ GitHub Container Registry 上有预构建的镜像：
 
 | 镜像 | 标签 | Dockerfile | 适用场景 |
 |:--|:--|:--|:--|
-| **标准版** | `ghcr.io/wenjiazhu1980/grok2api:latest` | `Dockerfile` | 自托管 / docker compose |
-| **Railway 版** | `ghcr.io/wenjiazhu1980/grok2api:main-railway` | `Dockerfile.railway` | **Railway 部署**（无 cache mount） |
+| **标准版** | `ghcr.io/wenjiazhu2026/grok2api:latest` | `Dockerfile` | 自托管 / docker compose |
+| **Railway 版** | `ghcr.io/wenjiazhu2026/grok2api:main-railway` | `Dockerfile.railway` | **Railway 部署**（无 cache mount） |
 
 **主要区别：**
 
@@ -222,10 +222,10 @@ railway variable set GROK2API_SECRETS_JWT_SECRET="$(openssl rand -hex 32)"
 railway variable set GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 railway variable set GROK2API_DATABASE_DRIVER=postgres
 railway variable set GROK2API_DATABASE_URL='${{Postgres.DATABASE_PRIVATE_URL}}'
-railway up --image ghcr.io/wenjiazhu1980/grok2api:main-railway
+railway up --image ghcr.io/wenjiazhu2026/grok2api:main-railway
 
 # 方式二：Railway 控制台
-# 新建服务 → Docker Image → ghcr.io/wenjiazhu1980/grok2api:main-railway
+# 新建服务 → Docker Image → ghcr.io/wenjiazhu2026/grok2api:main-railway
 ```
 
 Railway 提供持久化的 PostgreSQL 和 Redis 插件，适合需要数据持久化的生产部署。
@@ -237,7 +237,7 @@ Railway 提供持久化的 PostgreSQL 和 Redis 插件，适合需要数据持�
 
 #### 部署步骤
 
-1. **Fork 本仓库**（或直接使用已包含 Railway 优化的 [wenjiazhu1980/grok2api](https://github.com/wenjiazhu1980/grok2api)）
+1. **Fork 本仓库**（或直接使用已包含 Railway 优化的 [wenjiazhu2026/grok2api](https://github.com/wenjiazhu2026/grok2api)）
 
 2. **关联项目**
 
