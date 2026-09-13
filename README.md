@@ -233,12 +233,17 @@ railway service create --name grok2api
 railway variable set GROK2API_SECRETS_JWT_SECRET="$(openssl rand -hex 32)"
 railway variable set GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 railway variable set GROK2API_DATABASE_DRIVER=postgres
-railway variable set GROK2API_DATABASE_URL='${{Postgres.DATABASE_PRIVATE_URL}}'
+railway variable set GROK2API_DATABASE_URL='${{<postgres-service-name>.DATABASE_URL}}'
 railway up --image ghcr.io/wenjiazhu2026/grok2api:main-railway
 
 # Option 2: Railway Dashboard
 # New Service → Docker Image → ghcr.io/wenjiazhu2026/grok2api:main-railway
 ```
+
+> **On the database reference:** Railway creates the PostgreSQL add-on with a randomized
+> name (for example `Postgres-vG9e`), and that template exposes **`DATABASE_URL`** only —
+> there is no `DATABASE_PRIVATE_URL`. Replace `<postgres-service-name>` with the actual
+> service name from your dashboard, e.g. `${{Postgres-vG9e.DATABASE_URL}}`.
 
 Railway provides persistent PostgreSQL and Redis add-ons, making it ideal for production deployments with data persistence requirements.
 
@@ -249,38 +254,56 @@ Railway provides persistent PostgreSQL and Redis add-ons, making it ideal for pr
 
 #### Steps
 
-1. **Option A: Use pre-built image** (recommended) — see "Quick deploy" above
-
-2. **Link your project**
+1. **Link your project**
 
 ```bash
-railway init
+railway login
 railway link --project <your-project-id>
 ```
 
-3. **Add PostgreSQL database**
+2. **Add PostgreSQL database**
 
 ```bash
-railway add --service postgres
+railway add --database postgres
 ```
 
 Or add via Railway dashboard: **New → Database → Add PostgreSQL**
 
-4. **Configure environment variables** (set via Railway dashboard or CLI)
+3. **Configure environment variables**
 
-| Variable | Description | Example |
-|:--|:--|:--|
-| `GROK2API_SECRETS_JWT_SECRET` | JWT secret (≥32 chars) | `openssl rand -hex 32` |
-| `GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY` | Encryption key (base64) | `openssl rand -base64 32` |
-| `GROK2API_BOOTSTRAP_ADMIN_PASSWORD` | Initial admin password | `YourStrongPassword123!` |
-| `GROK2API_DATABASE_DRIVER` | Database driver | `postgres` |
-| `GROK2API_DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/db` |
-| `GROK2API_AUTH_SECURE_COOKIES` | Secure cookies (HTTPS) | `true` |
-| `GROK2API_SERVER_SWAGGER_ENABLED` | Enable Swagger UI | `false` |
+Two variables are **mandatory**: the entrypoint exits immediately when either is missing,
+which puts the service into a crash-restart loop.
 
-Railway automatically injects `DATABASE_URL` when you add a PostgreSQL plugin. You can reference it in `GROK2API_DATABASE_URL` using Railway's variable syntax: `${{Postgres.DATABASE_PRIVATE_URL}}`, or copy the full connection string from the PostgreSQL plugin settings.
+| Variable | Required | Description | Example |
+|:--|:--|:--|:--|
+| `GROK2API_SECRETS_JWT_SECRET` | **yes** | JWT secret (≥32 chars) | `openssl rand -hex 32` |
+| `GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY` | **yes** | Credential encryption key (base64) | `openssl rand -base64 32` |
+| `GROK2API_DATABASE_DRIVER` | yes (Postgres) | Database driver | `postgres` |
+| `GROK2API_DATABASE_URL` | yes (Postgres) | Connection string reference | `${{Postgres-vG9e.DATABASE_URL}}` |
+| `GROK2API_BOOTSTRAP_ADMIN_PASSWORD` | recommended | Initial admin password | `YourStrongPassword123!` |
+| `GROK2API_MEDIA_LOCAL_PATH` | recommended | Media path inside the volume | `/app/data/media` |
+| `GROK2API_AUTH_SECURE_COOKIES` | recommended | Secure cookies (HTTPS) | `true` |
+| `GROK2API_SERVER_SWAGGER_ENABLED` | optional | Enable Swagger UI | `false` |
 
-5. **Connect repository**
+```bash
+railway variable set GROK2API_SECRETS_JWT_SECRET="$(openssl rand -hex 32)" \
+  GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+  GROK2API_DATABASE_DRIVER=postgres \
+  GROK2API_DATABASE_URL='${{Postgres-vG9e.DATABASE_URL}}' \
+  GROK2API_MEDIA_LOCAL_PATH=/app/data/media \
+  GROK2API_AUTH_SECURE_COOKIES=true
+```
+
+> **Never rotate `GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY` on a running deployment** —
+> credentials already stored can no longer be decrypted. Rotating the JWT secret
+> invalidates every active session.
+
+4. **Attach a volume**
+
+Mount a volume at `/app/data` so media files survive redeploys (dashboard:
+**Service → Volumes → Add Volume**).
+
+5. **Connect repository and set the Dockerfile path**
 
 ```bash
 railway service source connect --repo <your-repo> --branch main
@@ -288,11 +311,18 @@ railway service source connect --repo <your-repo> --branch main
 
 Or via dashboard: **Settings → Source → Connect GitHub repo**
 
-Railway will automatically detect the `Dockerfile.railway` (which removes `--mount=type=cache` directives not supported by Railway) and build from it.
+> **Important:** Railway does **not** auto-detect `Dockerfile.railway`. With no Dockerfile
+> path configured it falls back to the root `Dockerfile`, whose `--mount=type=cache`
+> directives are unsupported by Railway and make the build fail. Set it explicitly under
+> **Service → Settings → Build → Dockerfile Path = `Dockerfile.railway`**.
+>
+> `railway.json` in this repository is not applied by Railway, so it cannot be used to
+> declare the Dockerfile. Railway has also deprecated Config as Code (`railway.json` /
+> `railway.toml`) in favour of Infrastructure as Code (`.railway/railway.ts`).
 
 6. **Deploy**
 
-Railway will trigger a deployment automatically on the next push. To deploy manually:
+Railway triggers a deployment automatically on the next push. To deploy manually:
 
 ```bash
 railway up
@@ -301,26 +331,58 @@ railway up
 7. **Verify**
 
 ```bash
-curl https://<your-app>.railway.app/healthz
+curl https://<your-app>.up.railway.app/healthz
 ```
 
-Expected response: `{"ok":true}`
+Expected response: `{"ok":true}`. If the service does not come up, check the runtime log:
+
+```bash
+railway logs
+```
 
 #### Architecture on Railway
 
 ```
 Railway Service (grok2api)
-Railway Service (grok2api)
     │
     ├── Railway PostgreSQL Plugin (persistent)
     │       └── Accounts, credentials, sessions, audit logs
     │
-    ├── Railway Volume (cooperative-unity-volume, mounted at /app/data/)
+    ├── Railway Volume (mounted at /app/data/)
     │       └── Media files (GROK2API_MEDIA_LOCAL_PATH=/app/data/media)
     │
     └── QualityGuard Sidecar (embedded, auto-started)
             └── Egress quality monitoring & quarantine
 ```
+
+#### Custom domain
+
+```bash
+railway domain grok2api.example.com --port 8000
+railway domain status grok2api.example.com   # required DNS record + certificate state
+```
+
+- The command prints the CNAME record to add at your DNS provider, for example
+  `CNAME grok2api → xxxxxxxx.up.railway.app`.
+- Entry plans allow **one custom domain per service**; delete the existing one before
+  adding another, otherwise Railway returns `You have reached the limit for custom domains
+  per service on your plan`.
+- Custom domains are globally unique on Railway. If creation fails with
+  `Failed to create custom domain, please try again`, the domain is most likely still
+  attached to another Railway project — remove it there first.
+- The certificate is issued automatically once the CNAME propagates; verify with
+  `railway domain status` (`verified: true`, `CERTIFICATE_STATUS_TYPE_VALID`).
+
+#### Troubleshooting
+
+| Symptom | Cause | Fix |
+|:--|:--|:--|
+| Build fails after connecting the repo | Railway used the root `Dockerfile` with `--mount=type=cache` | Set **Dockerfile Path** to `Dockerfile.railway` |
+| Container restarts in a loop, log shows `GROK2API_SECRETS_JWT_SECRET: parameter not set` | Mandatory secrets missing | Set `GROK2API_SECRETS_JWT_SECRET` and `GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY` |
+| `GROK2API_DATABASE_URL` resolves empty | Referenced a variable the add-on does not expose (e.g. `DATABASE_PRIVATE_URL`) | Reference `<postgres-service-name>.DATABASE_URL` |
+| Custom domain unreachable | CNAME missing, or certificate still pending | Run `railway domain status <domain>` and add the printed CNAME |
+| Container restarts, log shows `qualityGuard 已启用，但未配置内部 bootstrap 文件路径` | Guard enabled while `GROK2API_QUALITY_GUARD_DIR` is empty | Set `GROK2API_QUALITY_GUARD_DIR=/var/lib/grok2api-quality-guard` |
+| Warning: `Config as Code ... deprecated` | `railway.json` is being phased out | Keep using it for now, or migrate to `.railway/railway.ts` |
 
 #### Enable QualityGuard (optional)
 
@@ -331,14 +393,23 @@ QualityGuard is an embedded Python sidecar that monitors egress node quality and
 **Enable via environment variable:**
 
 ```bash
-railway variable set GROK2API_QUALITY_GUARD_ENABLED=true
+railway variable set GROK2API_QUALITY_GUARD_ENABLED=true \
+  GROK2API_QUALITY_GUARD_DIR=/var/lib/grok2api-quality-guard
 ```
+
+> **`GROK2API_QUALITY_GUARD_DIR` is required whenever the guard is enabled.** The main
+> program derives the internal bootstrap file path from it; when the guard is enabled and
+> this variable is empty, startup aborts with
+> `qualityGuard 已启用，但未配置内部 bootstrap 文件路径` and the container enters a
+> restart loop. The image sets this default automatically, but set it explicitly if you
+> run the binary outside the provided image.
 
 **Key QualityGuard variables:**
 
 | Variable | Default | Description |
 |:--|:--|:--|
 | `GROK2API_QUALITY_GUARD_ENABLED` | `false` | Enable quality guard (`true`/`false`) |
+| `GROK2API_QUALITY_GUARD_DIR` | `/var/lib/grok2api-quality-guard` | Directory holding the internal bootstrap file (required when enabled) |
 | `GROK2API_QUALITY_GUARD_MODEL` | `grok-3.5` | Model for active probes |
 | `GROK2API_QUALITY_GUARD_MODE` | `active` | `passive`, `active`, or `hybrid` |
 | `GROK2API_QUALITY_GUARD_ACTIVE_INTERVAL` | `30m` | Interval between active probes |

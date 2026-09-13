@@ -1,11 +1,35 @@
 #!/bin/sh
 set -eu
 
+# The main program derives the QualityGuard bootstrap path from
+# GROK2API_QUALITY_GUARD_DIR, while docker/quality-guard-start.sh and the sidecar
+# (quality_guard.py) address that directory through hard-coded paths. Keep the
+# variable at that well-known location and move the directory itself onto the
+# persistent volume instead, so probe profiles and guard state survive redeploys.
+#
+# When the guard is enabled and this variable is empty, startup fails with
+# "qualityGuard 已启用，但未配置内部 bootstrap 文件路径".
+export GROK2API_QUALITY_GUARD_DIR="${GROK2API_QUALITY_GUARD_DIR:-/var/lib/grok2api-quality-guard}"
+
 umask 077
 
-quality_guard_dir=/var/lib/grok2api-quality-guard
+quality_guard_dir="${GROK2API_QUALITY_GUARD_DIR}"
+guard_persist_dir=/app/data/quality-guard
+
+# /app/data is the Railway volume mount point. Relocate only when it really is a
+# mounted directory, so the image keeps working without a volume attached.
+if [ -d /app/data ]; then
+    mkdir -p "${guard_persist_dir}"
+    chown grok2api:grok2api "${guard_persist_dir}"
+    chmod 0700 "${guard_persist_dir}"
+    if [ "${quality_guard_dir}" != "${guard_persist_dir}" ] && [ ! -L "${quality_guard_dir}" ]; then
+        rm -rf "${quality_guard_dir}"
+        ln -s "${guard_persist_dir}" "${quality_guard_dir}"
+    fi
+fi
+
 mkdir -p "${quality_guard_dir}"
-chown grok2api:grok2api "${quality_guard_dir}"
+chown -h grok2api:grok2api "${quality_guard_dir}" 2>/dev/null || true
 chmod 0700 "${quality_guard_dir}"
 
 # Check if config file exists

@@ -221,12 +221,16 @@ railway service create --name grok2api
 railway variable set GROK2API_SECRETS_JWT_SECRET="$(openssl rand -hex 32)"
 railway variable set GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 railway variable set GROK2API_DATABASE_DRIVER=postgres
-railway variable set GROK2API_DATABASE_URL='${{Postgres.DATABASE_PRIVATE_URL}}'
+railway variable set GROK2API_DATABASE_URL='${{<postgres 服务名>.DATABASE_URL}}'
 railway up --image ghcr.io/wenjiazhu2026/grok2api:main-railway
 
 # 方式二：Railway 控制台
 # 新建服务 → Docker Image → ghcr.io/wenjiazhu2026/grok2api:main-railway
 ```
+
+> **关于数据库引用**：Railway 的 PostgreSQL 插件使用随机名称（例如 `Postgres-vG9e`），
+> 且该模板**只暴露 `DATABASE_URL`**，不存在 `DATABASE_PRIVATE_URL`。请把 `<postgres 服务名>`
+> 替换为控制台中显示的实际服务名，例如 `${{Postgres-vG9e.DATABASE_URL}}`。
 
 Railway 提供持久化的 PostgreSQL 和 Redis 插件，适合需要数据持久化的生产部署。
 
@@ -237,39 +241,53 @@ Railway 提供持久化的 PostgreSQL 和 Redis 插件，适合需要数据持�
 
 #### 部署步骤
 
-1. **Fork 本仓库**（或直接使用已包含 Railway 优化的 [wenjiazhu2026/grok2api](https://github.com/wenjiazhu2026/grok2api)）
-
-2. **关联项目**
+1. **关联项目**
 
 ```bash
-railway init
+railway login
 railway link --project <你的项目ID>
 ```
 
-3. **添加 PostgreSQL 数据库**
+2. **添加 PostgreSQL 数据库**
 
 ```bash
-railway add --service postgres
+railway add --database postgres
 ```
 
 或在控制台操作：**New → Database → Add PostgreSQL**
 
-4. **配置环境变量**（可在控制台或 CLI 设置）
+3. **配置环境变量**
 
-| 变量 | 说明 | 示例 |
-|:--|:--|:--|
-| `GROK2API_SECRETS_JWT_SECRET` | JWT 密钥（≥32 字符） | `openssl rand -hex 32` |
-| `GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY` | 凭据加密密钥（Base64） | `openssl rand -base64 32` |
-| `GROK2API_BOOTSTRAP_ADMIN_PASSWORD` | 初始管理员密码 | `YourStrongPassword123!` |
-| `GROK2API_DATABASE_DRIVER` | 数据库驱动 | `postgres` |
-| `GROK2API_DATABASE_URL` | PostgreSQL 连接串 | `postgresql://user:pass@host:5432/db` |
-| `GROK2API_AUTH_SECURE_COOKIES` | HTTPS 下启用安全 Cookie | `true` |
-| `GROK2API_SERVER_SWAGGER_ENABLED` | 是否启用 Swagger | `false` |
+以下两个变量为**必填项**：缺失任意一个时 entrypoint 会立即退出，服务将陷入崩溃重启循环。
 
-> [!IMPORTANT]
-> 添加 PostgreSQL 插件后 Railway 会自动注入 `DATABASE_URL` 变量。`GROK2API_DATABASE_URL` 可以直接引用该变量：`${{Postgres.DATABASE_PRIVATE_URL}}`，也可从插件设置页复制完整连接串。如果 CLI 未解析引用语法，请直接填写完整连接串。
+| 变量 | 是否必填 | 说明 | 示例 |
+|:--|:--|:--|:--|
+| `GROK2API_SECRETS_JWT_SECRET` | **必填** | JWT 密钥（≥32 字符） | `openssl rand -hex 32` |
+| `GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY` | **必填** | 凭据加密密钥（Base64） | `openssl rand -base64 32` |
+| `GROK2API_DATABASE_DRIVER` | 使用 Postgres 时必填 | 数据库驱动 | `postgres` |
+| `GROK2API_DATABASE_URL` | 使用 Postgres 时必填 | 连接串引用 | `${{Postgres-vG9e.DATABASE_URL}}` |
+| `GROK2API_BOOTSTRAP_ADMIN_PASSWORD` | 建议设置 | 初始管理员密码 | `YourStrongPassword123!` |
+| `GROK2API_MEDIA_LOCAL_PATH` | 建议设置 | Volume 内的媒体目录 | `/app/data/media` |
+| `GROK2API_AUTH_SECURE_COOKIES` | 建议设置 | HTTPS 下启用安全 Cookie | `true` |
+| `GROK2API_SERVER_SWAGGER_ENABLED` | 可选 | 是否启用 Swagger | `false` |
 
-5. **连接仓库**
+```bash
+railway variable set GROK2API_SECRETS_JWT_SECRET="$(openssl rand -hex 32)" \
+  GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+  GROK2API_DATABASE_DRIVER=postgres \
+  GROK2API_DATABASE_URL='${{Postgres-vG9e.DATABASE_URL}}' \
+  GROK2API_MEDIA_LOCAL_PATH=/app/data/media \
+  GROK2API_AUTH_SECURE_COOKIES=true
+```
+
+> [!WARNING]
+> **已运行的服务切勿更换 `GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY`**，否则已存储的凭据将无法解密；更换 JWT 密钥会使所有已登录会话失效。
+
+4. **挂载 Volume**
+
+将 Volume 挂载到 `/app/data`，使媒体文件在重新部署后保留（控制台：**Service → Volumes → Add Volume**）。
+
+5. **连接仓库并指定 Dockerfile 路径**
 
 ```bash
 railway service source connect --repo <你的仓库> --branch main
@@ -277,7 +295,13 @@ railway service source connect --repo <你的仓库> --branch main
 
 或在控制台：**Settings → Source → Connect GitHub repo**
 
-Railway 会自动识别 `Dockerfile.railway`（已移除 Railway 不支持的 `--mount=type=cache` 指令）并从该文件构建。
+> [!IMPORTANT]
+> **Railway 不会自动识别 `Dockerfile.railway`。** 未配置 Dockerfile 路径时，它会回退使用仓库根目录的
+> `Dockerfile`，而该文件的 `--mount=type=cache` 指令不被 Railway 支持，会导致构建失败。必须显式设置：
+> **服务 → Settings → Build → Dockerfile Path = `Dockerfile.railway`**。
+>
+> 另外，本仓库的 `railway.json` 不会被 Railway 采用，无法用它指定 Dockerfile；Railway 也已弃用
+> Config as Code（`railway.json` / `railway.toml`），推荐迁移到基础设施即代码（`.railway/railway.ts`）。
 
 6. **部署**
 
@@ -290,10 +314,14 @@ railway up
 7. **验证**
 
 ```bash
-curl https://<你的应用>.railway.app/healthz
+curl https://<你的应用>.up.railway.app/healthz
 ```
 
-预期返回：`{"ok":true}`
+预期返回：`{"ok":true}`。若服务未正常启动，查看运行日志：
+
+```bash
+railway logs
+```
 
 #### Railway 架构示意
 
@@ -303,12 +331,38 @@ Railway Service (grok2api)
     ├── Railway PostgreSQL 插件（持久化）
     │       └── 账号、凭据、会话、审计日志
     │
-    ├── Railway Volume（cooperative-unity-volume，挂载在 /app/data/）
+    ├── Railway Volume（挂载在 /app/data/）
     │       └── 媒体文件（GROK2API_MEDIA_LOCAL_PATH=/app/data/media）
     │
     └── QualityGuard Sidecar（内置，容器内自动启动）
             └── 出口质量监控与隔离
 ```
+
+#### 自定义域名
+
+```bash
+railway domain grok2api.example.com --port 8000
+railway domain status grok2api.example.com   # 查看所需 DNS 记录与证书状态
+```
+
+- 命令会输出需要在 DNS 服务商添加的 CNAME 记录，例如 `CNAME grok2api → xxxxxxxx.up.railway.app`。
+- 入门套餐**每个服务仅允许 1 个自定义域名**；新增前需先删除已有的，否则会提示
+  `You have reached the limit for custom domains per service on your plan`。
+- Railway 的自定义域名全局唯一。若创建时返回 `Failed to create custom domain, please try again`，
+  通常是该域名仍挂在另一个 Railway 项目上，需先从那个项目移除。
+- CNAME 生效后 Railway 会自动签发证书，可用 `railway domain status` 确认
+  （`verified: true`、`CERTIFICATE_STATUS_TYPE_VALID`）。
+
+#### 常见问题排查
+
+| 现象 | 原因 | 处理 |
+|:--|:--|:--|
+| 连接仓库后构建失败 | Railway 使用了根目录 `Dockerfile`（含 `--mount=type=cache`） | 将 **Dockerfile Path** 设为 `Dockerfile.railway` |
+| 容器反复重启，日志出现 `GROK2API_SECRETS_JWT_SECRET: parameter not set` | 缺少必填密钥 | 设置 `GROK2API_SECRETS_JWT_SECRET` 与 `GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY` |
+| `GROK2API_DATABASE_URL` 取值为空 | 引用了插件不存在的变量（如 `DATABASE_PRIVATE_URL`） | 改为引用 `<postgres 服务名>.DATABASE_URL` |
+| 自定义域名无法访问 | CNAME 未配置，或证书仍在签发 | 执行 `railway domain status <域名>` 并按输出添加 CNAME |
+| 容器反复重启，日志出现 `qualityGuard 已启用，但未配置内部 bootstrap 文件路径` | 已启用守护但 `GROK2API_QUALITY_GUARD_DIR` 为空 | 设置 `GROK2API_QUALITY_GUARD_DIR=/var/lib/grok2api-quality-guard` |
+| 提示 `Config as Code ... deprecated` | `railway.json` 即将停用 | 暂可继续使用，或迁移到 `.railway/railway.ts` |
 
 #### 启用 QualityGuard（可选）
 
@@ -319,14 +373,22 @@ QualityGuard 是一个内置的 Python sidecar，用于监控出口节点质量�
 **通过环境变量启用：**
 
 ```bash
-railway variable set GROK2API_QUALITY_GUARD_ENABLED=true
+railway variable set GROK2API_QUALITY_GUARD_ENABLED=true \
+  GROK2API_QUALITY_GUARD_DIR=/var/lib/grok2api-quality-guard
 ```
+
+> [!IMPORTANT]
+> **启用质量守护时必须设置 `GROK2API_QUALITY_GUARD_DIR`。** 主程序从该变量推导内部 bootstrap
+> 文件路径；启用守护但该变量为空时，启动会直接失败并报
+> `qualityGuard 已启用，但未配置内部 bootstrap 文件路径`，容器陷入重启循环。
+> 官方镜像已内置该默认值（entrypoint 自动补齐），若在镜像外直接运行二进制，请手动设置。
 
 **常用 QualityGuard 变量：**
 
 | 变量 | 默认值 | 说明 |
 |:--|:--|:--|
 | `GROK2API_QUALITY_GUARD_ENABLED` | `false` | 是否启用质量守护（`true`/`false`） |
+| `GROK2API_QUALITY_GUARD_DIR` | `/var/lib/grok2api-quality-guard` | 存放内部 bootstrap 文件的目录（启用时必填） |
 | `GROK2API_QUALITY_GUARD_MODEL` | `grok-3.5` | 活跃探测使用的模型 |
 | `GROK2API_QUALITY_GUARD_MODE` | `active` | 模式：`passive`、`active` 或 `hybrid` |
 | `GROK2API_QUALITY_GUARD_ACTIVE_INTERVAL` | `30m` | 活跃探测间隔 |
