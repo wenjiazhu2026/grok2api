@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -238,7 +239,7 @@ func (h *Handler) qualityGuardStatus(c *gin.Context) {
 		"lastPassivePollAt": state.LastPassivePollAt,
 		"config": gin.H{
 			"mode": state.Guard.Mode, "model": state.Guard.Model,
-			"node_ids": state.Guard.NodeIDs, "active_interval_seconds": state.Guard.ActiveIntervalSeconds,
+			"node_ids": managedNodeIDs(state), "active_interval_seconds": state.Guard.ActiveIntervalSeconds,
 			"passive_poll_seconds": state.Guard.PassivePollSeconds, "soft_tps": state.Guard.SoftTPS,
 			"hard_tps": state.Guard.HardTPS, "consecutive_soft": state.Guard.ConsecutiveSoft,
 			"consecutive_errors": state.Guard.ConsecutiveErrors, "quarantine_seconds": state.Guard.QuarantineSeconds,
@@ -309,6 +310,23 @@ type qualityGuardRuntimeConfigSettings struct {
 	MinHealthyNodes       int     `json:"min_healthy_nodes"`
 }
 
+// managedNodeIDs reports the egress nodes the guard currently manages. An empty
+// configured list means "every eligible node", so fall back to the nodes the
+// guard has actually recorded in its state. Without this fallback the upper
+// bound for minHealthyNodes collapses to zero and no policy can ever be saved
+// ("最少保留节点必须在受管节点数量范围内").
+func managedNodeIDs(state qualityGuardState) []string {
+	if len(state.Guard.NodeIDs) > 0 {
+		return state.Guard.NodeIDs
+	}
+	ids := make([]string, 0, len(state.Nodes))
+	for id := range state.Nodes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 func (h *Handler) updateQualityGuardConfig(c *gin.Context) {
 	if h.guardConfigPath == "" {
 		response.Error(c, http.StatusServiceUnavailable, "qualityGuardReadOnly", "质量守护策略当前只读")
@@ -326,7 +344,7 @@ func (h *Handler) updateQualityGuardConfig(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	if err := request.validate(len(state.Guard.NodeIDs)); err != nil {
+	if err := request.validate(len(managedNodeIDs(state))); err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidQualityGuardConfig", err.Error())
 		return
 	}
