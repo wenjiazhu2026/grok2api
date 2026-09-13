@@ -368,33 +368,56 @@ railway domain status grok2api.example.com   # 查看所需 DNS 记录与证书�
 
 QualityGuard 是一个内置的 Python sidecar，用于监控出口节点质量并在异常时隔离节点。启用后会通过 entrypoint 后台自动启动，无需额外部署。
 
-**前置条件**：在管理端配置至少一个出口代理节点后再启用质量守护。
+**前置条件**
+
+1. 在管理端配置至少一个出口代理节点。
+2. 设置 `GROK2API_BASE_URL` 为容器内回环地址，否则 sidecar 无法访问内部接口。
 
 **通过环境变量启用：**
 
 ```bash
 railway variable set GROK2API_QUALITY_GUARD_ENABLED=true \
-  GROK2API_QUALITY_GUARD_DIR=/var/lib/grok2api-quality-guard
+  GROK2API_BASE_URL=http://127.0.0.1:8000 \
+  GROK2API_QUALITY_GUARD_MODEL=grok-4.6 \
+  GROK2API_QUALITY_GUARD_SOFT_TPS=1500 \
+  GROK2API_QUALITY_GUARD_HARD_TPS=3000
 ```
 
 > [!IMPORTANT]
-> **启用质量守护时必须设置 `GROK2API_QUALITY_GUARD_DIR`。** 主程序从该变量推导内部 bootstrap
-> 文件路径；启用守护但该变量为空时，启动会直接失败并报
-> `qualityGuard 已启用，但未配置内部 bootstrap 文件路径`，容器陷入重启循环。
-> 官方镜像已内置该默认值（entrypoint 自动补齐），若在镜像外直接运行二进制，请手动设置。
+> **`GROK2API_BASE_URL` 为必填项。** sidecar 从环境变量读取该地址（bootstrap 文件里没有
+> 这个字段）。不设置时会回落到 Compose 的服务名 `grok2api`，该主机名在 Railway 容器内
+> 无法解析，导致守护发现不到任何出口节点、节点列表恒为空、每轮巡检报 RuntimeError。
+
+> [!IMPORTANT]
+> **`GROK2API_QUALITY_GUARD_DIR` 请保持默认值，不要修改。** 该变量只有主程序读取；
+> `docker/quality-guard-start.sh` 与 sidecar 是通过硬编码路径访问该目录的。改动这个变量
+> 会让两侧读写不同目录，守护找不到 bootstrap 后静默退出（表现为「质量守护模式失效」）。
+> 镜像已改为把该目录软链到持久卷，因此探针方案与守护状态可跨重新部署保留。
+
+> [!IMPORTANT]
+> **探测模型必须选账号中真实存在的模型。** entrypoint 默认的 `grok-3.5` 在当前账号中
+> 并不存在，探测会返回 `502 egressQualityProbeFailed`（前端提示「质量检测暂不可用」）。
+> 可用模型请查询 `GET /api/admin/v1/models`。
 
 **常用 QualityGuard 变量：**
 
 | 变量 | 默认值 | 说明 |
 |:--|:--|:--|
 | `GROK2API_QUALITY_GUARD_ENABLED` | `false` | 是否启用质量守护（`true`/`false`） |
-| `GROK2API_QUALITY_GUARD_DIR` | `/var/lib/grok2api-quality-guard` | 存放内部 bootstrap 文件的目录（启用时必填） |
-| `GROK2API_QUALITY_GUARD_MODEL` | `grok-3.5` | 活跃探测使用的模型 |
+| `GROK2API_BASE_URL` | — | **必填**。内部接口地址，填 `http://127.0.0.1:8000` |
+| `GROK2API_QUALITY_GUARD_DIR` | `/var/lib/grok2api-quality-guard` | 保持默认；entrypoint 会将其软链到持久卷 |
+| `GROK2API_QUALITY_GUARD_MODEL` | `grok-3.5` | 活跃探测使用的模型——必须选账号真实存在的 |
 | `GROK2API_QUALITY_GUARD_MODE` | `active` | 模式：`passive`、`active` 或 `hybrid` |
 | `GROK2API_QUALITY_GUARD_ACTIVE_INTERVAL` | `30m` | 活跃探测间隔 |
-| `GROK2API_QUALITY_GUARD_SOFT_TPS` | `500` | 软 TPS 阈值，超过后触发隔离 |
-| `GROK2API_QUALITY_GUARD_HARD_TPS` | `1000` | 硬 TPS 阈值，超过后立即隔离 |
+| `GROK2API_QUALITY_GUARD_SOFT_TPS` | `500` | 软 TPS 阈值（建议 1500，见下方说明） |
+| `GROK2API_QUALITY_GUARD_HARD_TPS` | `1000` | 硬 TPS 阈值（建议 3000，见下方说明） |
 | `GROK2API_QUALITY_GUARD_FAIL_CLOSED` | `false` | 是否在确认前隔离节点 |
+
+> [!WARNING]
+> **探测推理模型时应调高 TPS 阈值。** `outputTokensPerSecond` 的分母是生成窗口，分子包含
+> 推理 Token。当探测长时间推理、随后只输出一小段可见内容时，该窗口会塌缩、TPS 被显著放大
+> ——同一个方案连续两次实测为 54.5 与 1245.7，后者在硬阈值 1000 下会把健康节点误判隔离。
+> 使用 `grok-4.6` 时 1500 / 3000 较为合适。
 
 #### 常用环境变量参考
 
@@ -404,6 +427,58 @@ railway variable set GROK2API_QUALITY_GUARD_ENABLED=true \
 | `GROK2API_DATABASE_SQLITE_PATH` | `/tmp/backend.db` | SQLite 路径（postgres 时忽略） |
 | `GROK2API_RUNTIME_STORE_DRIVER` | `memory` | `memory` 或 `redis` |
 | `GROK2API_MEDIA_LOCAL_PATH` | `/app/data/media` | 本地媒体存储路径 |
+
+#### 部署实践（实测验证）
+
+以下配置在真实 Railway 部署中逐项验证通过，建议按顺序配置。
+
+**服务设置**
+
+| 设置项 | 取值 | 原因 |
+|:--|:--|:--|
+| Build → Dockerfile Path | `Dockerfile.railway` | Railway 不会自动识别；根目录 `Dockerfile` 含 `--mount=type=cache`，会导致构建失败 |
+| Volume 挂载 | `/app/data` | 持久化媒体文件，以及守护的探针方案与状态 |
+| 重启策略 | `ON_FAILURE`，最多 3 次 | 与 `railway.json` 一致 |
+| 副本数 | `1` | `runtime_store=memory` 仅支持单副本 |
+
+**环境变量（完整可用集合）**
+
+| 变量 | 取值 |
+|:--|:--|
+| `GROK2API_SECRETS_JWT_SECRET` | `openssl rand -hex 32` |
+| `GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY` | `openssl rand -base64 32` |
+| `GROK2API_BOOTSTRAP_ADMIN_PASSWORD` | 自行设定强密码 |
+| `GROK2API_DATABASE_DRIVER` | `postgres` |
+| `GROK2API_DATABASE_URL` | `${{<postgres 服务名>.DATABASE_URL}}` |
+| `GROK2API_MEDIA_LOCAL_PATH` | `/app/data/media` |
+| `GROK2API_AUTH_SECURE_COOKIES` | `true` |
+| `GROK2API_SERVER_SWAGGER_ENABLED` | `false` |
+
+建议一次性写入，避免多次触发重新部署：
+
+```bash
+railway variable set \
+  GROK2API_SECRETS_JWT_SECRET="$(openssl rand -hex 32)" \
+  GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+  GROK2API_DATABASE_DRIVER=postgres \
+  GROK2API_DATABASE_URL='${{Postgres-vG9e.DATABASE_URL}}' \
+  GROK2API_MEDIA_LOCAL_PATH=/app/data/media \
+  GROK2API_AUTH_SECURE_COOKIES=true \
+  GROK2API_SERVER_SWAGGER_ENABLED=false
+```
+
+**验证**
+
+```bash
+curl https://<你的应用>.up.railway.app/healthz   # 期望 {"ok":true}
+railway logs                                      # 查看启动日志
+railway domain status <域名>                       # 查看 DNS 记录与证书状态
+```
+
+启动成功的日志依次出现 `Config generated successfully`、`server_started` 与
+`startup_reconciliation_completed`。若容器反复重启并报
+`GROK2API_SECRETS_JWT_SECRET: parameter not set`，说明两个必需密钥缺失。
+其余情况见上方「常见问题排查」。
 
 ### 源码运行
 

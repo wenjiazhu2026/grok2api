@@ -388,34 +388,57 @@ railway domain status grok2api.example.com   # required DNS record + certificate
 
 QualityGuard is an embedded Python sidecar that monitors egress node quality and quarantines suspect nodes. It is automatically started when `qualityGuard.enabled` is true.
 
-**Prerequisite**: Configure at least one egress proxy node in the admin panel before enabling the guard.
+**Prerequisites**
 
-**Enable via environment variable:**
+1. At least one egress proxy node configured in the admin panel.
+2. `GROK2API_BASE_URL` set to the in-container loopback address — without it the sidecar
+   cannot reach the internal API and every probe cycle fails with `nodeSummary.total = 0`.
+
+**Enable via environment variables:**
 
 ```bash
 railway variable set GROK2API_QUALITY_GUARD_ENABLED=true \
-  GROK2API_QUALITY_GUARD_DIR=/var/lib/grok2api-quality-guard
+  GROK2API_BASE_URL=http://127.0.0.1:8000 \
+  GROK2API_QUALITY_GUARD_MODEL=grok-4.6 \
+  GROK2API_QUALITY_GUARD_SOFT_TPS=1500 \
+  GROK2API_QUALITY_GUARD_HARD_TPS=3000
 ```
 
-> **`GROK2API_QUALITY_GUARD_DIR` is required whenever the guard is enabled.** The main
-> program derives the internal bootstrap file path from it; when the guard is enabled and
-> this variable is empty, startup aborts with
-> `qualityGuard 已启用，但未配置内部 bootstrap 文件路径` and the container enters a
-> restart loop. The image sets this default automatically, but set it explicitly if you
-> run the binary outside the provided image.
+> **`GROK2API_BASE_URL` is mandatory.** The sidecar reads it from the environment (the
+> bootstrap file carries no base URL). Unset, it falls back to the Compose service hostname
+> `grok2api`, which does not resolve inside a Railway container — no egress node is ever
+> discovered and the guard reports an empty node list.
+
+> **Leave `GROK2API_QUALITY_GUARD_DIR` at its default.** Only the main program reads this
+> variable; `docker/quality-guard-start.sh` and the sidecar address that directory through
+> hard-coded paths. Pointing the variable elsewhere makes the two sides use different
+> directories and the guard exits silently. The image symlinks the directory onto the
+> persistent volume instead, so probe profiles and guard state survive redeploys.
+
+> **Choose a model your account actually has.** The entrypoint default (`grok-3.5`) is
+> absent from current accounts; probing then returns `502 egressQualityProbeFailed`
+> ("质量检测暂不可用"). Query `GET /api/admin/v1/models` for the live list.
 
 **Key QualityGuard variables:**
 
 | Variable | Default | Description |
 |:--|:--|:--|
 | `GROK2API_QUALITY_GUARD_ENABLED` | `false` | Enable quality guard (`true`/`false`) |
-| `GROK2API_QUALITY_GUARD_DIR` | `/var/lib/grok2api-quality-guard` | Directory holding the internal bootstrap file (required when enabled) |
-| `GROK2API_QUALITY_GUARD_MODEL` | `grok-3.5` | Model for active probes |
+| `GROK2API_BASE_URL` | — | **Required.** Internal API base URL; use `http://127.0.0.1:8000` |
+| `GROK2API_QUALITY_GUARD_DIR` | `/var/lib/grok2api-quality-guard` | Keep the default; the entrypoint symlinks it onto the volume |
+| `GROK2API_QUALITY_GUARD_MODEL` | `grok-3.5` | Model for active probes — set one your account actually has |
 | `GROK2API_QUALITY_GUARD_MODE` | `active` | `passive`, `active`, or `hybrid` |
 | `GROK2API_QUALITY_GUARD_ACTIVE_INTERVAL` | `30m` | Interval between active probes |
-| `GROK2API_QUALITY_GUARD_SOFT_TPS` | `500` | Soft TPS threshold for quarantine |
-| `GROK2API_QUALITY_GUARD_HARD_TPS` | `1000` | Hard TPS threshold for immediate quarantine |
+| `GROK2API_QUALITY_GUARD_SOFT_TPS` | `500` | Soft TPS threshold (1500 recommended, see note) |
+| `GROK2API_QUALITY_GUARD_HARD_TPS` | `1000` | Hard TPS threshold (3000 recommended, see note) |
 | `GROK2API_QUALITY_GUARD_FAIL_CLOSED` | `false` | Quarantine before probe confirmation |
+
+> **Raise the TPS thresholds when probing reasoning models.** `outputTokensPerSecond`
+> divides the output token count (reasoning tokens included) by the generation window.
+> When a probe reasons at length and then emits a short burst, that window collapses and
+> TPS is overstated — the same profile measured 54.5 and 1245.7 on consecutive runs, and
+> the latter would quarantine a healthy node at a hard threshold of 1000. Values of
+> 1500 / 3000 work well with `grok-4.6`.
 
 #### Key environment variables reference
 
@@ -425,6 +448,59 @@ railway variable set GROK2API_QUALITY_GUARD_ENABLED=true \
 | `GROK2API_DATABASE_SQLITE_PATH` | `/tmp/backend.db` | SQLite path (ignored when using postgres) |
 | `GROK2API_RUNTIME_STORE_DRIVER` | `memory` | `memory` or `redis` |
 | `GROK2API_MEDIA_LOCAL_PATH` | `/app/data/media` | Local media storage path |
+
+#### Deployment practices (verified in production)
+
+The settings below were validated on a live Railway deployment, listed in the order they
+should be applied.
+
+**Service settings**
+
+| Setting | Value | Reason |
+|:--|:--|:--|
+| Build → Dockerfile Path | `Dockerfile.railway` | Not auto-detected; the root `Dockerfile` uses `--mount=type=cache` and fails the build |
+| Volume mount | `/app/data` | Persists media, plus the guard's probe profiles and state |
+| Restart policy | `ON_FAILURE`, 3 retries | Mirrors `railway.json` |
+| Replicas | `1` | `runtime_store=memory` supports a single replica only |
+
+**Environment variables — complete working set**
+
+| Variable | Value |
+|:--|:--|
+| `GROK2API_SECRETS_JWT_SECRET` | `openssl rand -hex 32` |
+| `GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY` | `openssl rand -base64 32` |
+| `GROK2API_BOOTSTRAP_ADMIN_PASSWORD` | a strong password |
+| `GROK2API_DATABASE_DRIVER` | `postgres` |
+| `GROK2API_DATABASE_URL` | `${{<postgres-service-name>.DATABASE_URL}}` |
+| `GROK2API_MEDIA_LOCAL_PATH` | `/app/data/media` |
+| `GROK2API_AUTH_SECURE_COOKIES` | `true` |
+| `GROK2API_SERVER_SWAGGER_ENABLED` | `false` |
+
+Apply them in one call so a single redeploy picks everything up:
+
+```bash
+railway variable set \
+  GROK2API_SECRETS_JWT_SECRET="$(openssl rand -hex 32)" \
+  GROK2API_SECRETS_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+  GROK2API_DATABASE_DRIVER=postgres \
+  GROK2API_DATABASE_URL='${{Postgres-vG9e.DATABASE_URL}}' \
+  GROK2API_MEDIA_LOCAL_PATH=/app/data/media \
+  GROK2API_AUTH_SECURE_COOKIES=true \
+  GROK2API_SERVER_SWAGGER_ENABLED=false
+```
+
+**Verification**
+
+```bash
+curl https://<your-app>.up.railway.app/healthz   # expect {"ok":true}
+railway logs                                      # startup log
+railway domain status <domain>                    # DNS record + certificate state
+```
+
+A healthy startup logs `Config generated successfully`, then `server_started` and
+`startup_reconciliation_completed`. A crash loop reporting
+`GROK2API_SECRETS_JWT_SECRET: parameter not set` means the two mandatory secrets are
+missing. See **Troubleshooting** above for the rest.
 
 ### Run from source
 
