@@ -18,6 +18,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/runtime/memory"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
+	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
 func TestModelProviderFilterAcceptsOnlyKnownProviders(t *testing.T) {
@@ -530,4 +531,94 @@ func (a *modelCapabilityAdapter) ParseImportedCredentials([]byte) ([]provider.Cr
 }
 func (a *modelCapabilityAdapter) MarshalCredentials([]provider.CredentialSeed) ([]byte, error) {
 	return nil, nil
+}
+
+// TestBoundAccountValidationCoversAccountsOutsideNewestPage 覆盖账号数量超过单页窗口时
+// 旧账号被误判为「不存在或与模型来源不匹配」的回归场景。
+func TestBoundAccountValidationCoversAccountsOutsideNewestPage(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "model-bind-window.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := cipher.Encrypt("access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	accountRepo := relational.NewAccountRepository(database)
+	modelRepo := relational.NewModelRepository(database)
+	registry := provider.NewRegistry(&modelRouteAdapter{modelCapabilityAdapter: &modelCapabilityAdapter{}})
+	service := NewService(modelRepo, accountRepo, nil, registry)
+
+	now := time.Now().UTC()
+	oldest, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
+		Provider: account.ProviderBuild, Name: "legacy", SourceKey: "legacy", UserID: "usr-legacy",
+		EncryptedAccessToken: encrypted, ExpiresAt: now.Add(time.Hour),
+		AuthStatus: account.AuthStatusActive, CreatedAt: now.Add(-30 * 24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fillers := make([]account.Credential, 1000)
+	for index := range fillers {
+		fillers[index] = account.Credential{
+			Provider: account.ProviderBuild, Name: fmt.Sprintf("filler-%04d", index),
+			SourceKey: fmt.Sprintf("filler-%04d", index), UserID: fmt.Sprintf("usr-filler-%04d", index),
+			EncryptedAccessToken: encrypted, ExpiresAt: now.Add(time.Hour),
+			AuthStatus: account.AuthStatusActive, CreatedAt: now.Add(time.Duration(index) * time.Second),
+		}
+	}
+	if _, err := accountRepo.UpsertManyByIdentity(ctx, fillers); err != nil {
+		t.Fatal(err)
+	}
+
+	// 前置断言：默认「最新优先」分页窗口确实看不到最早创建的账号。
+	page, total, err := accountRepo.List(ctx, repository.AccountListQuery{
+		Page:   repository.PageQuery{Offset: 0, Limit: 1000},
+		Filter: repository.AccountListFilter{Provider: string(account.ProviderBuild)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total <= 1000 {
+		t.Fatalf("test fixture total = %d, want > 1000", total)
+	}
+	for _, value := range page {
+		if value.ID == oldest.ID {
+			t.Fatalf("fixture invalid: account %d still inside newest page", oldest.ID)
+		}
+	}
+
+	created, err := service.Create(ctx, CreateInput{
+		PublicID: "grok-bind-window", Provider: account.ProviderBuild, UpstreamModel: "grok-4.5",
+		Capability: modeldomain.CapabilityResponses, Enabled: true, AccountIDs: []uint64{oldest.ID},
+	})
+	if err != nil {
+		t.Fatalf("分页窗口外的账号被拒绝绑定: %v", err)
+	}
+	if created.ID == 0 {
+		t.Fatalf("created route = %#v", created)
+	}
+
+	if _, err := service.Create(ctx, CreateInput{
+		PublicID: "grok-bind-unbound", Provider: account.ProviderBuild, UpstreamModel: "grok-4.5",
+		Capability: modeldomain.CapabilityResponses, Enabled: true,
+	}); err != nil {
+		t.Fatalf("empty binding rejected: %v", err)
+	}
+	if _, err := service.Create(ctx, CreateInput{
+		PublicID: "grok-bind-unknown", Provider: account.ProviderBuild, UpstreamModel: "grok-4.5",
+		Capability: modeldomain.CapabilityResponses, Enabled: true, AccountIDs: []uint64{1 << 40},
+	}); err == nil {
+		t.Fatal("unknown account ID was accepted")
+	}
 }

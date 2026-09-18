@@ -329,16 +329,22 @@ func (s *Service) ListBindableAccounts(ctx context.Context, providerValue accoun
 	if !providerValue.IsValid() {
 		return nil, invalidInput("账号来源无效")
 	}
-	values, _, err := s.accounts.List(ctx, repository.AccountListQuery{
-		Page:   repository.PageQuery{Offset: 0, Limit: 1000},
-		Filter: repository.AccountListFilter{Provider: string(providerValue)},
-	})
-	if err != nil {
-		return nil, err
-	}
-	result := make([]AccountOption, 0, len(values))
-	for _, value := range values {
-		result = append(result, AccountOption{ID: value.ID, Name: value.Name})
+	// 以 ID 游标遍历全部账号：单页窗口只覆盖最新的一批，
+	// 会让更早创建的账号从绑定选择器中消失。
+	result := make([]AccountOption, 0, 1024)
+	afterID := uint64(0)
+	for {
+		values, _, err := s.accounts.ListProviderAccountBatch(ctx, providerValue, afterID, repository.MaxPageSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, value := range values {
+			result = append(result, AccountOption{ID: value.ID, Name: value.Name})
+			afterID = value.ID
+		}
+		if len(values) < repository.MaxPageSize {
+			break
+		}
 	}
 	return result, nil
 }
@@ -376,23 +382,26 @@ func (s *Service) validateBoundAccounts(ctx context.Context, providerValue accou
 	if len(result) == 0 {
 		return result, nil
 	}
-	values, _, err := s.accounts.List(ctx, repository.AccountListQuery{
-		Page:   repository.PageQuery{Offset: 0, Limit: 1000},
-		Filter: repository.AccountListFilter{Provider: string(providerValue)},
-	})
+	// 用主键计数校验归属，不依赖分页窗口：账号数超过单页上限时，
+	// 旧账号仍能通过校验。
+	matched, err := s.accounts.CountProviderAccountsByIDs(ctx, providerValue, result)
 	if err != nil {
 		return nil, err
 	}
-	available := make(map[uint64]bool, len(values))
-	for _, value := range values {
-		available[value.ID] = true
+	if int(matched) == len(result) {
+		return result, nil
 	}
+	// 仅在存在不匹配绑定项时逐一定位，保持原有错误文案可读。
 	for _, id := range result {
-		if !available[id] {
+		single, countErr := s.accounts.CountProviderAccountsByIDs(ctx, providerValue, []uint64{id})
+		if countErr != nil {
+			return nil, countErr
+		}
+		if single == 0 {
 			return nil, invalidInput(fmt.Sprintf("账号 %d 不存在或与模型来源不匹配", id))
 		}
 	}
-	return result, nil
+	return nil, invalidInput("绑定账号不存在或与模型来源不匹配")
 }
 
 // BatchSetEnabled 批量更新模型路由启停状态。
